@@ -1,0 +1,22 @@
+name = "ai-job-search-agent"
+main = "src/index.ts"
+compatibility_date = "2024-06-20"
+
+[ai]
+binding = "AI"
+
+[[d1_databases]]
+binding = "DB"
+database_name = "job-search-db"
+database_id = "YOUR_D1_DATABASE_ID"
+# Run: wrangler d1 create job-search-db
+# Then replace database_id above with the returned ID
+
+[vars]
+# Add any job board API keys here
+# RAPIDAPI_KEY = ""
+# ADZUNA_APP_ID = ""
+# ADZUNA_APP_KEY = ""
+
+[site]
+bucket = "./public"

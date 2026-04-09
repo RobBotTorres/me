@@ -1,0 +1,19 @@
+{
+  "name": "ai-job-search-agent",
+  "version": "1.0.0",
+  "private": true,
+  "scripts": {
+    "dev": "wrangler dev",
+    "deploy": "wrangler deploy",
+    "db:init": "wrangler d1 execute job-search-db --local --file=src/db/schema.sql",
+    "db:init:remote": "wrangler d1 execute job-search-db --remote --file=src/db/schema.sql"
+  },
+  "dependencies": {
+    "hono": "^4.4.0"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "^4.20240620.0",
+    "typescript": "^5.5.0",
+    "wrangler": "^3.60.0"
+  }
+}
