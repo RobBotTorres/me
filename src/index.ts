@@ -49,10 +49,7 @@ app.route('/api/resumes', resumeRoutes);
 app.route('/api/applications', applicationRoutes);
 app.route('/api/search', searchRoutes);
 
-// Serve frontend for non-API routes
-app.get('/', async (c) => {
-  const html = await fetch(new URL('/index.html', c.req.url));
-  return new Response(html.body, { headers: { 'Content-Type': 'text/html' } });
-});
+// Static frontend (public/index.html) is served automatically by the
+// [assets] binding in wrangler.toml. This worker only handles /api/* routes.
 
 export default app;
