@@ -28,9 +28,9 @@ app.get('/api/health', (c) => {
 
 // Test endpoint: hit embedding directly so we can isolate whether Workers AI works
 app.post('/api/test/embed', async (c) => {
-  const body = await c.req.json<{ texts?: string[]; count?: number }>().catch(() => ({}));
-  const count = body.count || 40;
-  const texts = body.texts || Array.from({ length: count }, (_, i) => `test job ${i} content`);
+  const body = await c.req.json<{ texts?: string[]; count?: number }>().catch(() => ({} as { texts?: string[]; count?: number }));
+  const count = body.count ?? 40;
+  const texts = body.texts ?? Array.from({ length: count }, (_, i) => `test job ${i} content`);
   const start = Date.now();
   try {
     const response = await c.env.AI.run('@cf/baai/bge-base-en-v1.5', { text: texts });
