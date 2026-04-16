@@ -1,126 +1,219 @@
-import { Env, Resume, ExternalJob, MatchResult } from '../types';
-import { matchJobToResume, extractJobSkills, getEmbedding, cosineSimilarity } from './ai';
+import { Env, Resume, ExternalJob, ResumeDiagnosis, JobLane } from '../types';
+import {
+  diagnoseResume,
+  rerankJobs,
+  getEmbedding,
+  getEmbeddingsBatch,
+  cosineSimilarity,
+  extractJobSkills,
+} from './ai';
+import { searchJobs } from './jobs';
+
+// How many jobs to fetch, semantically pre-filter, and LLM-rerank.
+const JOBS_PER_QUERY = 15;
+const MAX_QUERIES = 6;
+const SEMANTIC_TOP_N = 30;
+const RERANK_BATCH_SIZE = 8;
 
 /**
- * Orchestrates the matching pipeline:
- * 1. Extract skills from job descriptions
- * 2. Compute AI match scores against resume
- * 3. Store results in D1
+ * Full resume pipeline:
+ *  1. Diagnose resume (STEP 1-5)
+ *  2. Save diagnosis + embedding
+ *  3. Search job boards using target_titles
+ *  4. Embed jobs, semantic pre-filter to top N
+ *  5. LLM rerank with lane assignment
+ *  6. Save ranked jobs with lane + reasoning
  */
+export async function runFullPipeline(env: Env, resumeId: number): Promise<void> {
+  const updateStatus = async (status: string, error?: string) => {
+    await env.DB.prepare(
+      `UPDATE resumes SET processing_status = ?, processing_error = ?, updated_at = datetime('now') WHERE id = ?`
+    ).bind(status, error || null, resumeId).run();
+  };
 
-export async function matchAndStoreJobs(
-  env: Env,
-  resume: Resume,
-  externalJobs: ExternalJob[]
-): Promise<number> {
-  const resumeSkills: string[] = JSON.parse(resume.skills || '[]');
-  const resumeSummary = resume.summary || resume.raw_text.slice(0, 500);
+  try {
+    const resume = await env.DB.prepare('SELECT * FROM resumes WHERE id = ?')
+      .bind(resumeId).first<Resume>();
+    if (!resume) throw new Error('Resume not found');
 
-  let stored = 0;
+    // STEP 1: Diagnose + embed in parallel
+    await updateStatus('diagnosing');
+    const [diagnosis, embedding] = await Promise.all([
+      diagnoseResume(env.AI, resume.raw_text),
+      getEmbedding(env.AI, resume.raw_text),
+    ]);
 
-  // Process jobs in batches of 5 to avoid overwhelming Workers AI
-  const batchSize = 5;
-  for (let i = 0; i < externalJobs.length; i += batchSize) {
-    const batch = externalJobs.slice(i, i + batchSize);
+    await env.DB.prepare(`
+      UPDATE resumes SET
+        skills = ?, experience_years = ?, summary = ?,
+        analysis = ?, career_identities = ?, target_titles = ?,
+        embedding = ?, updated_at = datetime('now')
+      WHERE id = ?
+    `).bind(
+      JSON.stringify(diagnosis.skills),
+      diagnosis.experience_years,
+      diagnosis.summary,
+      JSON.stringify(diagnosis),
+      JSON.stringify(diagnosis.identities),
+      JSON.stringify(diagnosis.target_titles),
+      JSON.stringify(embedding),
+      resumeId
+    ).run();
 
-    const results = await Promise.all(
-      batch.map(async (job) => {
-        // Check if job already exists
-        const existing = await env.DB.prepare(
-          'SELECT id FROM jobs WHERE external_id = ?'
-        ).bind(job.external_id || '').first();
+    // STEP 2: Search using target_titles
+    await updateStatus('searching');
+    const queries = diagnosis.target_titles.slice(0, MAX_QUERIES);
+    if (queries.length === 0) {
+      await updateStatus('complete');
+      return;
+    }
 
-        if (existing) return null;
-
-        // Extract required skills from job description
-        const requiredSkills = await extractJobSkills(env.AI, job.description);
-
-        // Compute AI match score
-        const match = await matchJobToResume(
-          env.AI,
-          resumeSkills,
-          resumeSummary,
-          job.title,
-          job.description
-        );
-
-        return { job, requiredSkills, match };
+    const searchPromises = queries.map((q) =>
+      searchJobs({
+        query: q,
+        rapidApiKey: env.RAPIDAPI_KEY,
+        adzunaAppId: env.ADZUNA_APP_ID,
+        adzunaAppKey: env.ADZUNA_APP_KEY,
       })
     );
+    const searchResults = await Promise.all(searchPromises);
+    const allJobs = dedupeJobs(searchResults.flat()).slice(0, JOBS_PER_QUERY * queries.length);
 
-    // Insert results into D1
-    for (const result of results) {
-      if (!result) continue;
-      const { job, requiredSkills, match } = result;
+    if (allJobs.length === 0) {
+      await updateStatus('complete');
+      return;
+    }
 
+    // STEP 3: Semantic pre-filter
+    await updateStatus('ranking');
+    const jobTexts = allJobs.map((j) => `${j.title} at ${j.company}\n${j.description}`);
+    const jobEmbeddings = await embedInBatches(env, jobTexts);
+
+    const scored = allJobs.map((job, i) => ({
+      job,
+      embedding: jobEmbeddings[i],
+      semantic: cosineSimilarity(embedding, jobEmbeddings[i]),
+    }));
+    scored.sort((a, b) => b.semantic - a.semantic);
+    const topSemantic = scored.slice(0, SEMANTIC_TOP_N);
+
+    // STEP 4: LLM rerank in batches
+    const rankedJobs: {
+      job: ExternalJob;
+      embedding: number[];
+      semantic: number;
+      score: number;
+      lane: JobLane;
+      reasoning: string;
+    }[] = [];
+
+    for (let i = 0; i < topSemantic.length; i += RERANK_BATCH_SIZE) {
+      const batch = topSemantic.slice(i, i + RERANK_BATCH_SIZE);
       try {
+        const results = await rerankJobs(
+          env.AI,
+          diagnosis,
+          resume.raw_text,
+          batch.map((b) => ({
+            title: b.job.title,
+            company: b.job.company,
+            description: b.job.description,
+          }))
+        );
+        for (const r of results) {
+          const src = batch[r.job_index];
+          if (!src) continue;
+          rankedJobs.push({
+            ...src,
+            score: r.score,
+            lane: r.lane,
+            reasoning: r.reasoning,
+          });
+        }
+      } catch {
+        // If rerank fails for a batch, fall back to semantic score
+        for (const b of batch) {
+          rankedJobs.push({
+            ...b,
+            score: Math.round(b.semantic * 100),
+            lane: 'domain_relevant',
+            reasoning: 'Ranked by semantic similarity (LLM rerank failed).',
+          });
+        }
+      }
+    }
+
+    // STEP 5: Store jobs (replace existing ones tied to this resume)
+    await env.DB.prepare('DELETE FROM jobs WHERE resume_id = ?').bind(resumeId).run();
+
+    for (const r of rankedJobs) {
+      try {
+        const skills = await extractJobSkills(env.AI, r.job.description).catch(() => []);
         await env.DB.prepare(`
           INSERT INTO jobs (external_id, title, company, location, description, url,
             salary_min, salary_max, job_type, remote, source, skills_required,
-            match_score, match_explanation, posted_at)
-          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            embedding, match_score, match_explanation, semantic_score, lane,
+            resume_id, posted_at)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         `).bind(
-          job.external_id || null,
-          job.title,
-          job.company,
-          job.location || null,
-          job.description,
-          job.url,
-          job.salary_min ?? null,
-          job.salary_max ?? null,
-          job.job_type || 'full-time',
-          job.remote ? 1 : 0,
-          job.source,
-          JSON.stringify(requiredSkills),
-          match.score,
-          match.explanation,
-          job.posted_at || null
+          r.job.external_id || null,
+          r.job.title,
+          r.job.company,
+          r.job.location || null,
+          r.job.description,
+          r.job.url,
+          r.job.salary_min ?? null,
+          r.job.salary_max ?? null,
+          r.job.job_type || 'full-time',
+          r.job.remote ? 1 : 0,
+          r.job.source,
+          JSON.stringify(skills),
+          JSON.stringify(r.embedding),
+          r.score,
+          r.reasoning,
+          r.semantic,
+          r.lane,
+          resumeId,
+          r.job.posted_at || null
         ).run();
-
-        stored++;
       } catch {
-        // Skip duplicates or DB errors
+        // skip duplicates / DB errors
       }
     }
-  }
 
-  return stored;
+    await updateStatus('complete');
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    await updateStatus('error', msg);
+  }
 }
 
-export async function recomputeMatchScores(env: Env, resume: Resume): Promise<number> {
-  const resumeSkills: string[] = JSON.parse(resume.skills || '[]');
-  const resumeSummary = resume.summary || resume.raw_text.slice(0, 500);
-
-  const jobs = await env.DB.prepare(
-    'SELECT * FROM jobs ORDER BY created_at DESC LIMIT 100'
-  ).all();
-
-  if (!jobs.results) return 0;
-
-  let updated = 0;
-  const batchSize = 5;
-
-  for (let i = 0; i < jobs.results.length; i += batchSize) {
-    const batch = jobs.results.slice(i, i + batchSize);
-
-    await Promise.all(
-      batch.map(async (job: Record<string, unknown>) => {
-        const match = await matchJobToResume(
-          env.AI,
-          resumeSkills,
-          resumeSummary,
-          job.title as string,
-          (job.description as string) || ''
-        );
-
-        await env.DB.prepare(
-          'UPDATE jobs SET match_score = ?, match_explanation = ? WHERE id = ?'
-        ).bind(match.score, match.explanation, job.id as number).run();
-
-        updated++;
-      })
-    );
+function dedupeJobs(jobs: ExternalJob[]): ExternalJob[] {
+  const seen = new Set<string>();
+  const out: ExternalJob[] = [];
+  for (const j of jobs) {
+    const key = j.external_id || `${j.title}::${j.company}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push(j);
   }
+  return out;
+}
 
-  return updated;
+async function embedInBatches(env: Env, texts: string[]): Promise<number[][]> {
+  const BATCH = 16;
+  const out: number[][] = [];
+  for (let i = 0; i < texts.length; i += BATCH) {
+    const batch = texts.slice(i, i + BATCH);
+    const embeddings = await getEmbeddingsBatch(env.AI, batch);
+    out.push(...embeddings);
+  }
+  return out;
+}
+
+/**
+ * Rerun search/rank against an existing resume (reuses stored diagnosis).
+ */
+export async function rematchResume(env: Env, resumeId: number): Promise<void> {
+  await runFullPipeline(env, resumeId);
 }

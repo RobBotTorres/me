@@ -1,19 +1,20 @@
 import { Hono } from 'hono';
 import { Env, Resume } from '../types';
-import { analyzeResume } from '../services/ai';
-import { recomputeMatchScores } from '../services/matcher';
+import { runFullPipeline } from '../services/matcher';
 
 const resumes = new Hono<{ Bindings: Env }>();
 
-// List all resumes
+// List all resumes with status
 resumes.get('/', async (c) => {
   const results = await c.env.DB.prepare(
-    'SELECT id, name, skills, experience_years, summary, created_at FROM resumes ORDER BY created_at DESC'
+    `SELECT id, name, skills, experience_years, summary, career_identities,
+            target_titles, processing_status, processing_error, created_at, updated_at
+     FROM resumes ORDER BY created_at DESC`
   ).all();
   return c.json({ resumes: results.results });
 });
 
-// Get single resume
+// Get single resume (includes full analysis)
 resumes.get('/:id', async (c) => {
   const id = c.req.param('id');
   const resume = await c.env.DB.prepare('SELECT * FROM resumes WHERE id = ?').bind(id).first();
@@ -21,68 +22,61 @@ resumes.get('/:id', async (c) => {
   return c.json({ resume });
 });
 
-// Upload & analyze a resume
+// Lightweight status poll
+resumes.get('/:id/status', async (c) => {
+  const id = c.req.param('id');
+  const row = await c.env.DB.prepare(
+    'SELECT id, processing_status, processing_error, updated_at FROM resumes WHERE id = ?'
+  ).bind(id).first();
+  if (!row) return c.json({ error: 'Resume not found' }, 404);
+
+  const jobCount = await c.env.DB.prepare(
+    'SELECT COUNT(*) as count FROM jobs WHERE resume_id = ?'
+  ).bind(id).first<{ count: number }>();
+
+  return c.json({ ...row, job_count: jobCount?.count || 0 });
+});
+
+// Upload resume + kick off full pipeline
 resumes.post('/', async (c) => {
   const body = await c.req.json<{ name: string; text: string }>();
-
   if (!body.name || !body.text) {
     return c.json({ error: 'name and text are required' }, 400);
   }
 
-  // AI analysis
-  const analysis = await analyzeResume(c.env.AI, body.text);
-
   const result = await c.env.DB.prepare(`
-    INSERT INTO resumes (name, raw_text, skills, experience_years, summary)
-    VALUES (?, ?, ?, ?, ?)
-  `).bind(
-    body.name,
-    body.text,
-    JSON.stringify(analysis.skills),
-    analysis.experience_years,
-    analysis.summary
-  ).run();
+    INSERT INTO resumes (name, raw_text, processing_status)
+    VALUES (?, ?, 'extracting')
+  `).bind(body.name, body.text).run();
 
-  return c.json({
-    id: result.meta.last_row_id,
-    name: body.name,
-    skills: analysis.skills,
-    experience_years: analysis.experience_years,
-    summary: analysis.summary,
-  }, 201);
+  const resumeId = result.meta.last_row_id as number;
+
+  // Run pipeline in background
+  c.executionCtx.waitUntil(runFullPipeline(c.env, resumeId));
+
+  return c.json({ id: resumeId, processing_status: 'extracting' }, 201);
 });
 
-// Delete resume
+// Delete resume (and its associated jobs)
 resumes.delete('/:id', async (c) => {
   const id = c.req.param('id');
+  await c.env.DB.prepare('DELETE FROM jobs WHERE resume_id = ?').bind(id).run();
   await c.env.DB.prepare('DELETE FROM resumes WHERE id = ?').bind(id).run();
   return c.json({ success: true });
 });
 
-// Re-analyze resume with AI
-resumes.post('/:id/analyze', async (c) => {
-  const id = c.req.param('id');
-  const resume = await c.env.DB.prepare('SELECT * FROM resumes WHERE id = ?').bind(id).first<Resume>();
-  if (!resume) return c.json({ error: 'Resume not found' }, 404);
-
-  const analysis = await analyzeResume(c.env.AI, resume.raw_text);
-
-  await c.env.DB.prepare(`
-    UPDATE resumes SET skills = ?, experience_years = ?, summary = ?, updated_at = datetime('now')
-    WHERE id = ?
-  `).bind(JSON.stringify(analysis.skills), analysis.experience_years, analysis.summary, id).run();
-
-  return c.json({ analysis });
-});
-
-// Recompute match scores for all jobs against this resume
+// Re-run the full pipeline for an existing resume
 resumes.post('/:id/rematch', async (c) => {
   const id = c.req.param('id');
-  const resume = await c.env.DB.prepare('SELECT * FROM resumes WHERE id = ?').bind(id).first<Resume>();
+  const resume = await c.env.DB.prepare('SELECT id FROM resumes WHERE id = ?').bind(id).first<Resume>();
   if (!resume) return c.json({ error: 'Resume not found' }, 404);
 
-  const updated = await recomputeMatchScores(c.env, resume);
-  return c.json({ updated });
+  await c.env.DB.prepare(
+    `UPDATE resumes SET processing_status = 'diagnosing', processing_error = NULL WHERE id = ?`
+  ).bind(id).run();
+
+  c.executionCtx.waitUntil(runFullPipeline(c.env, Number(id)));
+  return c.json({ success: true, processing_status: 'diagnosing' });
 });
 
 export default resumes;

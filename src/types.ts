@@ -15,9 +15,23 @@ export interface Resume {
   experience_years: number | null;
   summary: string | null;
   embedding: string | null;
+  analysis: string | null;
+  career_identities: string;
+  target_titles: string;
+  processing_status: ProcessingStatus;
+  processing_error: string | null;
   created_at: string;
   updated_at: string;
 }
+
+export type ProcessingStatus =
+  | 'idle'
+  | 'extracting'
+  | 'diagnosing'
+  | 'searching'
+  | 'ranking'
+  | 'complete'
+  | 'error';
 
 export interface Job {
   id: number;
@@ -36,9 +50,14 @@ export interface Job {
   embedding: string | null;
   match_score: number | null;
   match_explanation: string | null;
+  semantic_score: number | null;
+  lane: JobLane | null;
+  resume_id: number | null;
   posted_at: string | null;
   created_at: string;
 }
+
+export type JobLane = 'fast_income' | 'domain_relevant' | 'aspirational';
 
 export interface Application {
   id: number;
@@ -46,6 +65,7 @@ export interface Application {
   resume_id: number | null;
   status: string;
   cover_letter: string | null;
+  tailored_resume: string | null;
   notes: string | null;
   applied_at: string | null;
   interview_at: string | null;
@@ -77,7 +97,6 @@ export interface SearchRun {
   completed_at: string | null;
 }
 
-// External job board API response types
 export interface ExternalJob {
   title: string;
   company: string;
@@ -93,15 +112,53 @@ export interface ExternalJob {
   posted_at?: string;
 }
 
-export interface AIAnalysis {
+// --- AI output shapes ---
+
+export interface CareerIdentity {
+  label: string;
+  strength: 'strong_on_paper' | 'strong_in_scope' | 'mixed';
+  evidence: string[];
+  liability_notes?: string;
+}
+
+export interface ResumeDiagnosis {
+  identities: CareerIdentity[];
+  target_titles: string[];
+  keywords: string[];
+  lanes: {
+    fast_income: LaneRecommendation;
+    domain_relevant: LaneRecommendation;
+    aspirational: LaneRecommendation;
+  };
+  gaps: {
+    fixable_30d: string[];
+    fixable_60_90d: string[];
+    structural: string[];
+  };
+  ranked_angles: SearchAngle[];
+  honest_notes: string;
   skills: string[];
   experience_years: number;
   summary: string;
 }
 
-export interface MatchResult {
+export interface LaneRecommendation {
+  description: string;
+  target_companies_or_types: string[];
+  realistic_timeline?: string;
+}
+
+export interface SearchAngle {
+  title: string;
+  company_type: string;
+  lane: JobLane;
+  why_it_fits: string;
+  top_5: boolean;
+}
+
+export interface JobRerankResult {
+  job_index: number;
   score: number;
-  explanation: string;
-  skills_matched: string[];
-  skills_missing: string[];
+  lane: JobLane;
+  reasoning: string;
 }

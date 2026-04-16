@@ -6,6 +6,11 @@ CREATE TABLE IF NOT EXISTS resumes (
   experience_years INTEGER,
   summary TEXT,
   embedding TEXT,
+  analysis TEXT,
+  career_identities TEXT DEFAULT '[]',
+  target_titles TEXT DEFAULT '[]',
+  processing_status TEXT DEFAULT 'idle',
+  processing_error TEXT,
   created_at TEXT DEFAULT (datetime('now')),
   updated_at TEXT DEFAULT (datetime('now'))
 );
@@ -27,6 +32,9 @@ CREATE TABLE IF NOT EXISTS jobs (
   embedding TEXT,
   match_score REAL,
   match_explanation TEXT,
+  semantic_score REAL,
+  lane TEXT,
+  resume_id INTEGER REFERENCES resumes(id),
   posted_at TEXT,
   created_at TEXT DEFAULT (datetime('now'))
 );
@@ -37,6 +45,7 @@ CREATE TABLE IF NOT EXISTS applications (
   resume_id INTEGER REFERENCES resumes(id),
   status TEXT DEFAULT 'saved',
   cover_letter TEXT,
+  tailored_resume TEXT,
   notes TEXT,
   applied_at TEXT,
   interview_at TEXT,
@@ -71,5 +80,8 @@ CREATE TABLE IF NOT EXISTS search_runs (
 CREATE INDEX IF NOT EXISTS idx_jobs_match_score ON jobs(match_score DESC);
 CREATE INDEX IF NOT EXISTS idx_jobs_source ON jobs(source);
 CREATE INDEX IF NOT EXISTS idx_jobs_company ON jobs(company);
+CREATE INDEX IF NOT EXISTS idx_jobs_lane ON jobs(lane);
+CREATE INDEX IF NOT EXISTS idx_jobs_resume_id ON jobs(resume_id);
 CREATE INDEX IF NOT EXISTS idx_applications_status ON applications(status);
 CREATE INDEX IF NOT EXISTS idx_applications_job_id ON applications(job_id);
+CREATE INDEX IF NOT EXISTS idx_resumes_status ON resumes(processing_status);
