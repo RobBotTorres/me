@@ -12,6 +12,16 @@ const app = new Hono<{ Bindings: Env }>();
 
 app.use('*', cors());
 
+// Return full error details instead of generic 500
+app.onError((err, c) => {
+  console.error('Unhandled error:', err);
+  return c.json({
+    error: err.message || 'Unknown error',
+    name: err.name,
+    stack: (err as Error).stack?.split('\n').slice(0, 5).join('\n'),
+  }, 500);
+});
+
 app.get('/api/health', (c) => {
   return c.json({ status: 'ok', service: 'job-search-agent', timestamp: new Date().toISOString() });
 });

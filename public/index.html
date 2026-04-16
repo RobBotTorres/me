@@ -401,7 +401,16 @@ async function loadProgress(resumeId) {
     const events = data.events || [];
     const el = document.getElementById('progress-' + resumeId);
     if (!el) return;
-    if (events.length === 0) { el.classList.add('hidden'); return; }
+
+    const workflowStatus = data.workflow_status;
+    const dbStatus = data.processing_status;
+    const header = `<p class="text-xs text-gray-500 mb-2">DB: <span class="font-mono">${esc(dbStatus)}</span>${workflowStatus ? ` · Workflow: <span class="font-mono">${esc(workflowStatus)}</span>` : ''}</p>`;
+
+    if (events.length === 0) {
+      el.classList.remove('hidden');
+      el.innerHTML = header + '<p class="text-xs text-gray-400 italic">No pipeline events yet — workflow may be queued.</p>';
+      return;
+    }
 
     const completed = events.filter(e => e.status === 'completed').length;
     const failed = events.filter(e => e.status === 'failed').length;
@@ -418,7 +427,7 @@ async function loadProgress(resumeId) {
     const icon = (s) => s === 'completed' ? '✓' : s === 'running' ? '◐' : s === 'failed' ? '✗' : '○';
 
     el.classList.remove('hidden');
-    el.innerHTML = `
+    el.innerHTML = header + `
       <div class="progress-track mb-2"><div class="progress-bar" style="width:${overallPct}%"></div></div>
       <div class="text-xs space-y-1">
         ${events.map(e => {
@@ -432,7 +441,11 @@ async function loadProgress(resumeId) {
         }).join('')}
       </div>`;
   } catch (err) {
-    console.error('Progress load error:', err);
+    const el = document.getElementById('progress-' + resumeId);
+    if (el) {
+      el.classList.remove('hidden');
+      el.innerHTML = `<p class="text-xs text-red-600">Progress load failed: ${esc(err.message)}</p>`;
+    }
   }
 }
 
