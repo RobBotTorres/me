@@ -145,47 +145,55 @@ export class ResumePipeline extends WorkflowEntrypoint<Env, ResumePipelineParams
       `UPDATE resumes SET processing_status = 'searching', updated_at = datetime('now') WHERE id = ?`
     ).bind(resumeId).run();
 
-    // --- Step 2: Search boards ---
-    const allJobs = await step.do(
-      'search-boards',
-      { retries: { limit: 2, delay: '5 seconds' }, timeout: '2 minutes' },
-      async () => {
-        await emitEvent(db, resumeId, 'search', 'running', { total: queries.length });
-        const searchResults = await Promise.all(
-          queries.map((q) =>
-            searchJobs({
-              query: q,
-              usaOnly: true,
-              rapidApiKey: this.env.RAPIDAPI_KEY,
-              adzunaAppId: this.env.ADZUNA_APP_ID,
-              adzunaAppKey: this.env.ADZUNA_APP_KEY,
-              joobleApiKey: this.env.JOOBLE_API_KEY,
-              findworkApiKey: this.env.FINDWORK_API_KEY,
-            })
-          )
-        );
-        const flat = searchResults.flat();
-        const deduped = dedupeJobs(flat).slice(0, JOBS_PER_QUERY * queries.length);
+    // Force a suspension so the next step gets a fresh subrequest budget
+    await step.sleep('pause-before-search', '1 second');
 
-        // Per-source tally - seed with all known sources so we can see zeros too
-        const bySource: Record<string, number> = {
-          remotive: 0, arbeitnow: 0, remoteok: 0, themuse: 0, usajobs: 0,
-          workingnomads: 0, jobicy: 0, hackernews: 0, adzuna: 0, jsearch: 0,
-          jooble: 0, findwork: 0,
-        };
-        for (const j of flat) bySource[j.source] = (bySource[j.source] || 0) + 1;
-        const breakdown = Object.entries(bySource)
-          .sort((a, b) => b[1] - a[1])
-          .map(([s, n]) => `${s}:${n}`).join(', ');
+    // --- Step 2: Search boards, one step per query (each = fresh invocation) ---
+    await emitEvent(db, resumeId, 'search', 'running', { total: queries.length });
 
-        await emitEvent(db, resumeId, 'search', 'completed', {
-          current: deduped.length,
-          total: queries.length,
-          message: `${deduped.length} unique jobs (${flat.length} raw) — ${breakdown}`,
-        });
-        return deduped;
-      }
-    );
+    const perQueryResults: ExternalJob[][] = [];
+    for (let i = 0; i < queries.length; i++) {
+      const q = queries[i];
+      const result = await step.do(
+        `search-query-${i}`,
+        { retries: { limit: 2, delay: '3 seconds' }, timeout: '1 minute' },
+        async () =>
+          searchJobs({
+            query: q,
+            usaOnly: true,
+            rapidApiKey: this.env.RAPIDAPI_KEY,
+            adzunaAppId: this.env.ADZUNA_APP_ID,
+            adzunaAppKey: this.env.ADZUNA_APP_KEY,
+            joobleApiKey: this.env.JOOBLE_API_KEY,
+            findworkApiKey: this.env.FINDWORK_API_KEY,
+          })
+      );
+      perQueryResults.push(result);
+      await emitEvent(db, resumeId, 'search', 'running', {
+        current: i + 1,
+        total: queries.length,
+      });
+    }
+
+    const flat = perQueryResults.flat();
+    const allJobs = dedupeJobs(flat).slice(0, JOBS_PER_QUERY * queries.length);
+
+    // Per-source tally
+    const bySource: Record<string, number> = {
+      remotive: 0, arbeitnow: 0, remoteok: 0, themuse: 0, usajobs: 0,
+      workingnomads: 0, jobicy: 0, hackernews: 0, adzuna: 0, jsearch: 0,
+      jooble: 0, findwork: 0,
+    };
+    for (const j of flat) bySource[j.source] = (bySource[j.source] || 0) + 1;
+    const breakdown = Object.entries(bySource)
+      .sort((a, b) => b[1] - a[1])
+      .map(([s, n]) => `${s}:${n}`).join(', ');
+
+    await emitEvent(db, resumeId, 'search', 'completed', {
+      current: allJobs.length,
+      total: queries.length,
+      message: `${allJobs.length} unique (${flat.length} raw) — ${breakdown}`,
+    });
 
     if (allJobs.length === 0) {
       await emitEvent(db, resumeId, 'embed_jobs', 'completed', { message: 'No jobs found' });
@@ -198,6 +206,9 @@ export class ResumePipeline extends WorkflowEntrypoint<Env, ResumePipelineParams
     await db.prepare(
       `UPDATE resumes SET processing_status = 'ranking', updated_at = datetime('now') WHERE id = ?`
     ).bind(resumeId).run();
+
+    // Another suspension → fresh subrequest budget for embed
+    await step.sleep('pause-before-embed', '1 second');
 
     // --- Step 3: Embed jobs (resilient per-batch; one bad batch doesn't kill step) ---
     const scored = await step.do(
@@ -266,6 +277,8 @@ export class ResumePipeline extends WorkflowEntrypoint<Env, ResumePipelineParams
       job: ExternalJob; embedding: number[]; semantic: number;
       score: number; lane: JobLane | null; reasoning: string; skills: string[];
     };
+
+    await step.sleep('pause-before-rerank', '1 second');
 
     const topForLLM = scored.slice(0, LLM_RANKED_COUNT);
     const semanticOnly = scored.slice(LLM_RANKED_COUNT);
@@ -339,6 +352,8 @@ export class ResumePipeline extends WorkflowEntrypoint<Env, ResumePipelineParams
       current: rankedJobs.length, total: rankedJobs.length,
       message: `${topForLLM.length} ranked by LLM, ${semanticOnly.length} by semantic`,
     });
+
+    await step.sleep('pause-before-save', '1 second');
 
     // --- Step 5: Save to D1 ---
     await step.do(
