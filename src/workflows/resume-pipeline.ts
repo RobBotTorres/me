@@ -198,34 +198,61 @@ export class ResumePipeline extends WorkflowEntrypoint<Env, ResumePipelineParams
       `UPDATE resumes SET processing_status = 'ranking', updated_at = datetime('now') WHERE id = ?`
     ).bind(resumeId).run();
 
-    // --- Step 3: Embed jobs ---
+    // --- Step 3: Embed jobs (resilient per-batch; one bad batch doesn't kill step) ---
     const scored = await step.do(
       'embed-jobs',
-      { retries: { limit: 2, delay: '5 seconds' }, timeout: '3 minutes' },
+      { retries: { limit: 2, delay: '10 seconds' }, timeout: '5 minutes' },
       async () => {
         await emitEvent(db, resumeId, 'embed_jobs', 'running', { current: 0, total: allJobs.length });
-        const jobTexts = allJobs.map((j) => `${j.title} at ${j.company}\n${j.description}`);
-        const jobEmbeddings: number[][] = [];
-        const BATCH = 16;
+
+        // Build texts, truncate aggressively to avoid payload errors
+        const jobTexts = allJobs.map((j) =>
+          `${j.title} at ${j.company}\n${(j.description || '').slice(0, 1500)}`
+        );
+
+        // Track successes; skip failed batches rather than aborting
+        const embeddingsMap = new Map<number, number[]>();
+        const BATCH = 10; // smaller batch = more resilient
+        let failedBatches = 0;
+        let lastError = '';
+
         for (let i = 0; i < jobTexts.length; i += BATCH) {
-          const part = await getEmbeddingsBatch(this.env.AI, jobTexts.slice(i, i + BATCH));
-          jobEmbeddings.push(...part);
+          const slice = jobTexts.slice(i, i + BATCH);
+          try {
+            const part = await getEmbeddingsBatch(this.env.AI, slice);
+            for (let k = 0; k < part.length; k++) {
+              embeddingsMap.set(i + k, part[k]);
+            }
+          } catch (err) {
+            failedBatches++;
+            lastError = err instanceof Error ? err.message : String(err);
+          }
           await emitEvent(db, resumeId, 'embed_jobs', 'running', {
             current: Math.min(i + BATCH, jobTexts.length),
             total: jobTexts.length,
+            message: failedBatches > 0 ? `${failedBatches} batches failed so far` : undefined,
           });
         }
-        const out = allJobs.map((job, i) => ({
-          job, embedding: jobEmbeddings[i],
-          semantic: cosineSimilarity(resumeEmbedding, jobEmbeddings[i]),
-        }));
-        out.sort((a, b) => b.semantic - a.semantic);
+
+        const scored = allJobs
+          .map((job, i) => {
+            const emb = embeddingsMap.get(i);
+            if (!emb) return null;
+            return { job, embedding: emb, semantic: cosineSimilarity(resumeEmbedding, emb) };
+          })
+          .filter((x): x is { job: ExternalJob; embedding: number[]; semantic: number } => x !== null);
+
+        if (scored.length === 0) {
+          throw new Error(`All ${jobTexts.length} embedding batches failed. Last error: ${lastError || 'unknown'}`);
+        }
+
+        scored.sort((a, b) => b.semantic - a.semantic);
         const totalKept = LLM_RANKED_COUNT + SEMANTIC_ONLY_COUNT;
         await emitEvent(db, resumeId, 'embed_jobs', 'completed', {
-          current: out.length, total: out.length,
-          message: `Embedded ${out.length}, top ${Math.min(totalKept, out.length)} selected for ranking`,
+          current: scored.length, total: allJobs.length,
+          message: `Embedded ${scored.length}/${allJobs.length}${failedBatches ? `, ${failedBatches} batches failed` : ''}; top ${Math.min(totalKept, scored.length)} kept`,
         });
-        return out.slice(0, totalKept);
+        return scored.slice(0, totalKept);
       }
     );
 

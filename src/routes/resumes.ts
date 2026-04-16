@@ -42,20 +42,41 @@ resumes.get('/:id/events', async (c) => {
   ).bind(id).first<{ workflow_id: string | null; processing_status: string }>();
 
   let workflow_status: string | null = null;
+  let workflow_error: string | null = null;
   if (resume?.workflow_id) {
     try {
       const instance = await c.env.PIPELINE.get(resume.workflow_id);
       const status = await instance.status();
       workflow_status = status.status;
-    } catch {
-      workflow_status = null;
+      if (status.error) {
+        workflow_error = typeof status.error === 'string' ? status.error : JSON.stringify(status.error);
+      } else if (status.output && typeof status.output === 'object' && 'error' in status.output) {
+        workflow_error = String((status.output as { error: unknown }).error);
+      }
+    } catch (e) {
+      workflow_error = (e as Error).message;
     }
   }
 
+  // If the workflow errored, mark any in-flight step rows as failed so the UI shows it clearly
+  if (workflow_status === 'errored') {
+    await c.env.DB.prepare(
+      `UPDATE pipeline_events SET status = 'failed',
+         message = COALESCE(message, ?), updated_at = datetime('now')
+       WHERE resume_id = ? AND status IN ('running', 'pending')`
+    ).bind(workflow_error || 'Workflow errored', id).run();
+  }
+
+  // Re-fetch after possible update
+  const freshRows = await c.env.DB.prepare(
+    `SELECT * FROM pipeline_events WHERE resume_id = ? ORDER BY id ASC`
+  ).bind(id).all<PipelineEvent>();
+
   return c.json({
-    events: rows.results || [],
+    events: freshRows.results || [],
     processing_status: resume?.processing_status || 'idle',
     workflow_status,
+    workflow_error,
   });
 });
 

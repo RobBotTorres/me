@@ -416,8 +416,10 @@ async function loadProgress(resumeId) {
     if (!el) return null;
 
     const workflowStatus = data.workflow_status;
+    const workflowError = data.workflow_error;
     const dbStatus = data.processing_status;
-    const header = `<p class="text-xs text-gray-500 mb-2">DB: <span class="font-mono">${esc(dbStatus)}</span>${workflowStatus ? ` · Workflow: <span class="font-mono">${esc(workflowStatus)}</span>` : ''}</p>`;
+    const header = `<p class="text-xs text-gray-500 mb-2">DB: <span class="font-mono">${esc(dbStatus)}</span>${workflowStatus ? ` · Workflow: <span class="font-mono">${esc(workflowStatus)}</span>` : ''}</p>
+      ${workflowError ? `<div class="text-xs text-red-700 bg-red-50 p-2 rounded mb-2 whitespace-pre-wrap font-mono">${esc(workflowError)}</div>` : ''}`;
 
     if (events.length === 0) {
       el.classList.remove('hidden');
