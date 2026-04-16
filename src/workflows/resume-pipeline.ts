@@ -166,8 +166,12 @@ export class ResumePipeline extends WorkflowEntrypoint<Env, ResumePipelineParams
         const flat = searchResults.flat();
         const deduped = dedupeJobs(flat).slice(0, JOBS_PER_QUERY * queries.length);
 
-        // Per-source tally so we can see which boards returned what
-        const bySource: Record<string, number> = {};
+        // Per-source tally - seed with all known sources so we can see zeros too
+        const bySource: Record<string, number> = {
+          remotive: 0, arbeitnow: 0, remoteok: 0, themuse: 0, usajobs: 0,
+          workingnomads: 0, jobicy: 0, hackernews: 0, adzuna: 0, jsearch: 0,
+          jooble: 0, findwork: 0,
+        };
         for (const j of flat) bySource[j.source] = (bySource[j.source] || 0) + 1;
         const breakdown = Object.entries(bySource)
           .sort((a, b) => b[1] - a[1])

@@ -135,7 +135,7 @@ async function searchUSAJobs(query: string, location?: string): Promise<External
       `https://data.usajobs.gov/api/search?Keyword=${encodeURIComponent(query)}&ResultsPerPage=50${loc}`,
       {
         headers: {
-          'User-Agent': 'job-search-agent (contact@example.com)',
+          'User-Agent': 'job-search-agent@cloudflare.workers',
           'Host': 'data.usajobs.gov',
         },
       }
@@ -455,28 +455,25 @@ const NON_US_REGEX = /\b(United Kingdom|\bUK\b|Great Britain|England|Scotland|Wa
 
 function isUSACompatible(job: ExternalJob): boolean {
   const loc = (job.location || '').trim();
-  const desc = job.description || '';
+  const desc = (job.description || '').slice(0, 800); // sample the top
 
   // Strong US signal in location → include
   if (US_REGEX.test(loc) || STATE_ABBREV_IN_CONTEXT.test(loc)) return true;
 
-  // Strong non-US signal → exclude
+  // Strong non-US signal in location → exclude
   if (NON_US_REGEX.test(loc)) return false;
 
-  // Remote/worldwide: accept if description mentions US or has no clear non-US signal
+  // Remote/worldwide: default include, only exclude if description is clearly non-US-only
   const looksRemote = job.remote || /remote|anywhere|worldwide|global/i.test(loc);
   if (looksRemote) {
-    if (NON_US_REGEX.test(desc)) {
-      // But check if description also lists US as eligible
-      return US_REGEX.test(desc);
-    }
-    if (US_REGEX.test(desc)) return true;
-    // Plain "Remote" with no country info: include (most remote roles accept US)
-    if (!loc || /^(remote|worldwide|global|anywhere|not specified)$/i.test(loc)) return true;
-    return false;
+    // Description mentions non-US AND doesn't mention US → exclude
+    if (NON_US_REGEX.test(desc) && !US_REGEX.test(desc)) return false;
+    return true;
   }
 
-  // Unknown/empty → exclude to be strict
+  // Unknown/empty location → be permissive (default include)
+  if (!loc || loc.toLowerCase() === 'not specified') return true;
+
   return false;
 }
 
