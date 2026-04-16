@@ -6,6 +6,8 @@ export interface Env {
   RAPIDAPI_KEY?: string;
   ADZUNA_APP_ID?: string;
   ADZUNA_APP_KEY?: string;
+  JOOBLE_API_KEY?: string;
+  FINDWORK_API_KEY?: string;
 }
 
 export interface PipelineEvent {

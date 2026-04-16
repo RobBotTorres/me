@@ -16,10 +16,11 @@ import { searchJobs } from '../services/jobs';
 export type ResumePipelineParams = { resumeId: number };
 
 // Tuning knobs
-const MAX_QUERIES = 6;
-const JOBS_PER_QUERY = 15;
-const SEMANTIC_TOP_N = 24;
-const RERANK_BATCH_SIZE = 12;
+const MAX_QUERIES = 10;
+const JOBS_PER_QUERY = 25;
+const LLM_RANKED_COUNT = 50;        // top N by semantic get LLM rerank (lane + reasoning)
+const SEMANTIC_ONLY_COUNT = 70;     // next N get semantic-only scores, no LLM cost
+const RERANK_BATCH_SIZE = 15;
 
 const STEPS = {
   diagnose: 'Diagnose resume',
@@ -156,6 +157,8 @@ export class ResumePipeline extends WorkflowEntrypoint<Env, ResumePipelineParams
               rapidApiKey: this.env.RAPIDAPI_KEY,
               adzunaAppId: this.env.ADZUNA_APP_ID,
               adzunaAppKey: this.env.ADZUNA_APP_KEY,
+              joobleApiKey: this.env.JOOBLE_API_KEY,
+              findworkApiKey: this.env.FINDWORK_API_KEY,
             })
           )
         );
@@ -203,27 +206,33 @@ export class ResumePipeline extends WorkflowEntrypoint<Env, ResumePipelineParams
           semantic: cosineSimilarity(resumeEmbedding, jobEmbeddings[i]),
         }));
         out.sort((a, b) => b.semantic - a.semantic);
+        const totalKept = LLM_RANKED_COUNT + SEMANTIC_ONLY_COUNT;
         await emitEvent(db, resumeId, 'embed_jobs', 'completed', {
           current: out.length, total: out.length,
-          message: `Embedded ${out.length}, top ${Math.min(SEMANTIC_TOP_N, out.length)} selected`,
+          message: `Embedded ${out.length}, top ${Math.min(totalKept, out.length)} selected for ranking`,
         });
-        return out.slice(0, SEMANTIC_TOP_N);
+        return out.slice(0, totalKept);
       }
     );
 
-    // --- Step 4: Rerank in batches (each batch is its own step → durable, retryable) ---
+    // --- Step 4: Hybrid ranking ---
+    // Top LLM_RANKED_COUNT get full LLM rerank (lane + reasoning)
+    // Next SEMANTIC_ONLY_COUNT get semantic-only scores (fast, no LLM)
     type RankedJob = {
       job: ExternalJob; embedding: number[]; semantic: number;
-      score: number; lane: JobLane; reasoning: string; skills: string[];
+      score: number; lane: JobLane | null; reasoning: string; skills: string[];
     };
 
-    const totalBatches = Math.ceil(scored.length / RERANK_BATCH_SIZE);
-    await emitEvent(db, resumeId, 'rerank', 'running', { current: 0, total: scored.length });
+    const topForLLM = scored.slice(0, LLM_RANKED_COUNT);
+    const semanticOnly = scored.slice(LLM_RANKED_COUNT);
+
+    const totalBatches = Math.ceil(topForLLM.length / RERANK_BATCH_SIZE);
+    await emitEvent(db, resumeId, 'rerank', 'running', { current: 0, total: topForLLM.length });
 
     const rankedJobs: RankedJob[] = [];
     for (let b = 0; b < totalBatches; b++) {
       const start = b * RERANK_BATCH_SIZE;
-      const batch = scored.slice(start, start + RERANK_BATCH_SIZE);
+      const batch = topForLLM.slice(start, start + RERANK_BATCH_SIZE);
 
       const batchRanked = await step.do(
         `rerank-batch-${b}`,
@@ -263,13 +272,25 @@ export class ResumePipeline extends WorkflowEntrypoint<Env, ResumePipelineParams
 
       rankedJobs.push(...batchRanked);
       await emitEvent(db, resumeId, 'rerank', 'running', {
-        current: Math.min((b + 1) * RERANK_BATCH_SIZE, scored.length),
-        total: scored.length,
+        current: Math.min((b + 1) * RERANK_BATCH_SIZE, topForLLM.length),
+        total: topForLLM.length,
       });
     }
+
+    // Append semantic-only tier (no LLM cost)
+    for (const s of semanticOnly) {
+      rankedJobs.push({
+        ...s,
+        score: Math.round(s.semantic * 100),
+        lane: null,
+        reasoning: 'Matched by semantic similarity (not LLM-reviewed).',
+        skills: [],
+      });
+    }
+
     await emitEvent(db, resumeId, 'rerank', 'completed', {
       current: rankedJobs.length, total: rankedJobs.length,
-      message: `Ranked ${rankedJobs.length} jobs`,
+      message: `${topForLLM.length} ranked by LLM, ${semanticOnly.length} by semantic`,
     });
 
     // --- Step 5: Save to D1 ---

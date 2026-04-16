@@ -236,6 +236,68 @@ async function searchJobicy(query: string): Promise<ExternalJob[]> {
   } catch { return []; }
 }
 
+// --- Jooble (free key, 140+ source meta-aggregator) ---
+async function searchJooble(query: string, location: string, apiKey?: string): Promise<ExternalJob[]> {
+  if (!apiKey) return [];
+  try {
+    const res = await fetch(`https://jooble.org/api/${apiKey}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ keywords: query, location: location || '', page: 1, ResultOnPage: 50 }),
+    });
+    if (!res.ok) return [];
+    const data = (await res.json()) as {
+      jobs?: Array<{
+        id: string | number; title: string; company: string; location: string;
+        snippet: string; salary?: string; type?: string; link: string; updated: string;
+      }>;
+    };
+    return (data.jobs || []).map((j) => ({
+      title: j.title,
+      company: j.company || 'Unknown',
+      location: j.location || 'Not specified',
+      description: stripHtml(j.snippet || ''),
+      url: j.link,
+      job_type: (j.type || 'full-time').toLowerCase(),
+      remote: /remote/i.test(j.location || ''),
+      source: 'jooble',
+      external_id: `jooble-${j.id}`,
+      posted_at: j.updated,
+    }));
+  } catch { return []; }
+}
+
+// --- Findwork.dev (free key, tech-focused aggregator) ---
+async function searchFindwork(query: string, apiKey?: string): Promise<ExternalJob[]> {
+  if (!apiKey) return [];
+  try {
+    const res = await fetch(
+      `https://findwork.dev/api/jobs/?search=${encodeURIComponent(query)}&sort_by=relevance`,
+      { headers: { Authorization: `Token ${apiKey}` } }
+    );
+    if (!res.ok) return [];
+    const data = (await res.json()) as {
+      results?: Array<{
+        id: number; role: string; company_name: string; location: string;
+        remote: boolean; text: string; url: string; date_posted: string;
+        employment_type: string; keywords: string[];
+      }>;
+    };
+    return (data.results || []).slice(0, 50).map((j) => ({
+      title: j.role,
+      company: j.company_name,
+      location: j.location || (j.remote ? 'Remote' : 'Not specified'),
+      description: stripHtml(j.text || ''),
+      url: j.url,
+      remote: j.remote,
+      job_type: (j.employment_type || 'full-time').toLowerCase(),
+      source: 'findwork',
+      external_id: `findwork-${j.id}`,
+      posted_at: j.date_posted,
+    }));
+  } catch { return []; }
+}
+
 // --- Hacker News Who's Hiring (via Algolia, free, no auth) ---
 async function searchHackerNews(query: string): Promise<ExternalJob[]> {
   try {
@@ -351,10 +413,15 @@ export interface SearchOptions {
   rapidApiKey?: string;
   adzunaAppId?: string;
   adzunaAppKey?: string;
+  joobleApiKey?: string;
+  findworkApiKey?: string;
 }
 
 export async function searchJobs(options: SearchOptions): Promise<ExternalJob[]> {
-  const { query, location = '', remoteOnly = false, rapidApiKey, adzunaAppId, adzunaAppKey } = options;
+  const {
+    query, location = '', remoteOnly = false,
+    rapidApiKey, adzunaAppId, adzunaAppKey, joobleApiKey, findworkApiKey,
+  } = options;
 
   const sources = await Promise.all([
     searchRemotive(query),
@@ -367,6 +434,8 @@ export async function searchJobs(options: SearchOptions): Promise<ExternalJob[]>
     searchHackerNews(query),
     searchAdzuna(query, location, adzunaAppId, adzunaAppKey),
     searchJSearch(query, location, rapidApiKey),
+    searchJooble(query, location, joobleApiKey),
+    searchFindwork(query, findworkApiKey),
   ]);
 
   let allJobs = sources.flat();
