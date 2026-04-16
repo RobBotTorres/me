@@ -206,6 +206,85 @@ async function searchWorkingNomads(query: string): Promise<ExternalJob[]> {
   } catch { return []; }
 }
 
+// --- Jobicy (free, remote, no auth) ---
+async function searchJobicy(query: string): Promise<ExternalJob[]> {
+  try {
+    const res = await fetch(
+      `https://jobicy.com/api/v2/remote-jobs?count=50&tag=${encodeURIComponent(query)}`
+    );
+    if (!res.ok) return [];
+    const data = (await res.json()) as {
+      jobs?: Array<{
+        id: string | number; jobTitle: string; companyName: string;
+        jobGeo?: string; jobExcerpt?: string; jobDescription?: string;
+        url: string; pubDate?: string; annualSalaryMin?: number; annualSalaryMax?: number;
+      }>;
+    };
+    return (data.jobs || []).slice(0, 25).map((j) => ({
+      title: j.jobTitle,
+      company: j.companyName,
+      location: j.jobGeo || 'Remote',
+      description: stripHtml(j.jobDescription || j.jobExcerpt || ''),
+      url: j.url,
+      remote: true,
+      salary_min: j.annualSalaryMin,
+      salary_max: j.annualSalaryMax,
+      source: 'jobicy',
+      external_id: `jobicy-${j.id}`,
+      posted_at: j.pubDate,
+    }));
+  } catch { return []; }
+}
+
+// --- Hacker News Who's Hiring (via Algolia, free, no auth) ---
+async function searchHackerNews(query: string): Promise<ExternalJob[]> {
+  try {
+    // 1. Find the latest "Ask HN: Who is hiring?" thread
+    const threadRes = await fetch(
+      'https://hn.algolia.com/api/v1/search?query=who+is+hiring&tags=story,author_whoishiring&hitsPerPage=1'
+    );
+    if (!threadRes.ok) return [];
+    const threadData = (await threadRes.json()) as {
+      hits: Array<{ objectID: string; title: string }>;
+    };
+    const storyId = threadData.hits?.[0]?.objectID;
+    if (!storyId) return [];
+
+    // 2. Search comments in that thread
+    const commentsRes = await fetch(
+      `https://hn.algolia.com/api/v1/search?query=${encodeURIComponent(query)}&tags=comment,story_${storyId}&hitsPerPage=20`
+    );
+    if (!commentsRes.ok) return [];
+    const commentData = (await commentsRes.json()) as {
+      hits: Array<{
+        objectID: string; author: string; comment_text: string;
+        created_at: string; story_id: number;
+      }>;
+    };
+
+    return (commentData.hits || []).map((h) => {
+      const text = stripHtml(h.comment_text || '');
+      // First line usually has "Company | Role | Location | Remote/Onsite"
+      const firstLine = text.split('\n')[0] || text.slice(0, 120);
+      const parts = firstLine.split('|').map((p) => p.trim());
+      const company = parts[0] || h.author || 'HN post';
+      const title = parts[1] || firstLine.slice(0, 80);
+      const locationGuess = parts.slice(2).join(' · ').slice(0, 100) || 'See post';
+      return {
+        title: title.slice(0, 150),
+        company: company.slice(0, 100),
+        location: locationGuess,
+        description: text.slice(0, 4000),
+        url: `https://news.ycombinator.com/item?id=${h.objectID}`,
+        remote: /remote/i.test(firstLine),
+        source: 'hackernews',
+        external_id: `hn-${h.objectID}`,
+        posted_at: h.created_at,
+      };
+    });
+  } catch { return []; }
+}
+
 // --- Adzuna (requires free API key) ---
 async function searchAdzuna(
   query: string, location: string, appId?: string, appKey?: string
@@ -284,6 +363,8 @@ export async function searchJobs(options: SearchOptions): Promise<ExternalJob[]>
     searchTheMuse(query),
     searchUSAJobs(query, location),
     searchWorkingNomads(query),
+    searchJobicy(query),
+    searchHackerNews(query),
     searchAdzuna(query, location, adzunaAppId, adzunaAppKey),
     searchJSearch(query, location, rapidApiKey),
   ]);
