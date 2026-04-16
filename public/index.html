@@ -161,7 +161,16 @@ function showTab(tab) {
 
 async function api(path, options = {}) {
   const res = await fetch(API + path, { headers: { 'Content-Type': 'application/json' }, ...options });
-  return res.json();
+  const ct = res.headers.get('content-type') || '';
+  if (!ct.includes('application/json')) {
+    const txt = await res.text();
+    throw new Error(`HTTP ${res.status}: ${txt.slice(0, 300)}`);
+  }
+  const data = await res.json();
+  if (!res.ok || data.error) {
+    throw new Error(data.error || `HTTP ${res.status}`);
+  }
+  return data;
 }
 
 function scoreClass(s) { return s >= 70 ? 'score-high' : s >= 40 ? 'score-med' : 'score-low'; }
@@ -494,7 +503,7 @@ async function uploadResume() {
     document.getElementById('resume-text').value = '';
     loadResumes();
   } catch (e) {
-    alert('Error: ' + e.message);
+    alert('Upload failed: ' + e.message + '\n\nIf this mentions workflow or column missing, visit /api/diagnostics to see what needs fixing.');
   } finally {
     btn.disabled = false; btn.textContent = 'Upload & Analyze';
   }
@@ -502,8 +511,12 @@ async function uploadResume() {
 
 async function rematchResume(id) {
   if (!confirm('Re-run the full diagnosis and job search?')) return;
-  await api('/resumes/' + id + '/rematch', { method: 'POST' });
-  loadResumes();
+  try {
+    await api('/resumes/' + id + '/rematch', { method: 'POST' });
+    loadResumes();
+  } catch (e) {
+    alert('Re-run failed: ' + e.message + '\n\nCheck /api/diagnostics to see which setup step is missing.');
+  }
 }
 
 async function resetResume(id) {

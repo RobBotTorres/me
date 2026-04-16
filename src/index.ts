@@ -16,6 +16,43 @@ app.get('/api/health', (c) => {
   return c.json({ status: 'ok', service: 'job-search-agent', timestamp: new Date().toISOString() });
 });
 
+// Diagnostics: check schema + bindings
+app.get('/api/diagnostics', async (c) => {
+  const checks: Record<string, { ok: boolean; detail?: string }> = {};
+
+  // D1 tables
+  try {
+    const tables = await c.env.DB.prepare(
+      "SELECT name FROM sqlite_master WHERE type='table'"
+    ).all<{ name: string }>();
+    const names = new Set((tables.results || []).map((r) => r.name));
+    checks.d1_pipeline_events_table = { ok: names.has('pipeline_events'), detail: names.has('pipeline_events') ? undefined : 'Migration 002 not applied' };
+  } catch (e) {
+    checks.d1_pipeline_events_table = { ok: false, detail: (e as Error).message };
+  }
+
+  // workflow_id column
+  try {
+    const cols = await c.env.DB.prepare("PRAGMA table_info(resumes)").all<{ name: string }>();
+    const hasCol = (cols.results || []).some((c) => c.name === 'workflow_id');
+    checks.d1_workflow_id_column = { ok: hasCol, detail: hasCol ? undefined : 'ALTER TABLE resumes ADD COLUMN workflow_id TEXT pending' };
+  } catch (e) {
+    checks.d1_workflow_id_column = { ok: false, detail: (e as Error).message };
+  }
+
+  // Workflow binding present
+  checks.workflow_binding = {
+    ok: typeof c.env.PIPELINE !== 'undefined',
+    detail: typeof c.env.PIPELINE === 'undefined' ? 'PIPELINE binding missing. Not deployed or plan does not support Workflows.' : undefined,
+  };
+
+  // AI binding
+  checks.ai_binding = { ok: typeof c.env.AI !== 'undefined' };
+
+  const allOk = Object.values(checks).every((c) => c.ok);
+  return c.json({ ok: allOk, checks });
+});
+
 app.get('/api/dashboard', async (c) => {
   const [jobCount, resumeCount, appCount, pipeline, topJobs, recentApps] = await Promise.all([
     c.env.DB.prepare(
