@@ -28,3 +28,11 @@ not_found_handling = "single-page-application"
 #   npx wrangler secret put RAPIDAPI_KEY
 #   npx wrangler secret put ADZUNA_APP_ID
 #   npx wrangler secret put ADZUNA_APP_KEY
+
+# Daily pipeline rerun. Cron expressions are UTC.
+# 0 7 * * *  = 3 AM ET standard time / 2 AM ET daylight time
+# Adjust if you're in a different timezone:
+#   3 AM PT standard = "0 11 * * *"  (10 UTC during daylight time)
+#   3 AM CT standard = "0 9 * * *"
+[triggers]
+crons = ["0 7 * * *"]

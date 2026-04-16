@@ -143,11 +143,32 @@ export async function runFullPipeline(env: Env, resumeId: number): Promise<void>
       }
     }
 
-    // STEP 5: Store jobs (replace existing ones tied to this resume)
-    await env.DB.prepare('DELETE FROM jobs WHERE resume_id = ?').bind(resumeId).run();
+    // STEP 5: Store jobs. Delete previous results tied to this resume EXCEPT
+    // those that have an application attached (preserves the user's tracker).
+    await env.DB.prepare(`
+      DELETE FROM jobs
+      WHERE resume_id = ?
+        AND id NOT IN (SELECT job_id FROM applications)
+    `).bind(resumeId).run();
 
     for (const r of rankedJobs) {
       try {
+        // Skip if we already have this external_id (e.g. preserved via application)
+        const existing = r.job.external_id
+          ? await env.DB.prepare('SELECT id FROM jobs WHERE external_id = ?')
+              .bind(r.job.external_id).first<{ id: number }>()
+          : null;
+
+        if (existing) {
+          // Update scores/lane in place so a saved job gets fresh ranking info too
+          await env.DB.prepare(`
+            UPDATE jobs SET match_score = ?, match_explanation = ?,
+              semantic_score = ?, lane = ?, resume_id = ?
+            WHERE id = ?
+          `).bind(r.score, r.reasoning, r.semantic, r.lane, resumeId, existing.id).run();
+          continue;
+        }
+
         const skills = await extractJobSkills(env.AI, r.job.description).catch(() => []);
         await env.DB.prepare(`
           INSERT INTO jobs (external_id, title, company, location, description, url,

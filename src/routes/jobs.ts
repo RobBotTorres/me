@@ -23,7 +23,12 @@ jobs.get('/', async (c) => {
   const safeSort = allowedSorts.includes(sortBy) ? sortBy : 'match_score';
   const safeOrder = order === 'ASC' ? 'ASC' : 'DESC';
 
+  // Jobs that already have an application are hidden here (they show in the
+  // Applications tab instead). Set include_saved=1 to include them anyway.
+  const includeSaved = c.req.query('include_saved') === '1';
+
   let query = 'SELECT * FROM jobs WHERE 1=1';
+  if (!includeSaved) query += ' AND id NOT IN (SELECT job_id FROM applications)';
   const params: (string | number)[] = [];
 
   if (resumeId) { query += ' AND resume_id = ?'; params.push(parseInt(resumeId)); }
