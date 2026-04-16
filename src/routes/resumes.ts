@@ -4,14 +4,31 @@ import { runFullPipeline } from '../services/matcher';
 
 const resumes = new Hono<{ Bindings: Env }>();
 
-// List all resumes with status
+// List all resumes with status. Auto-marks stale (>5 min) in-progress as error.
 resumes.get('/', async (c) => {
+  await c.env.DB.prepare(
+    `UPDATE resumes SET processing_status = 'error',
+       processing_error = 'Pipeline timed out (worker likely killed). Click Re-run to retry.'
+     WHERE processing_status IN ('extracting','diagnosing','searching','ranking')
+       AND (julianday('now') - julianday(updated_at)) * 24 * 60 > 5`
+  ).run();
+
   const results = await c.env.DB.prepare(
     `SELECT id, name, skills, experience_years, summary, career_identities,
             target_titles, processing_status, processing_error, created_at, updated_at
      FROM resumes ORDER BY created_at DESC`
   ).all();
   return c.json({ resumes: results.results });
+});
+
+// Manually reset a stuck resume status
+resumes.post('/:id/reset', async (c) => {
+  const id = c.req.param('id');
+  await c.env.DB.prepare(
+    `UPDATE resumes SET processing_status = 'idle',
+       processing_error = NULL, updated_at = datetime('now') WHERE id = ?`
+  ).bind(id).run();
+  return c.json({ success: true });
 });
 
 // Get single resume (includes full analysis)

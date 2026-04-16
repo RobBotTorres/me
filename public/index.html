@@ -370,6 +370,7 @@ async function loadResumes() {
           <div class="flex flex-col gap-2 shrink-0 ml-3">
             ${status === 'complete' ? `<button onclick="viewAnalysis(${r.id})" class="text-xs text-indigo-600 hover:underline">View Analysis</button>` : ''}
             ${!isProcessing ? `<button onclick="rematchResume(${r.id})" class="text-xs text-blue-600 hover:underline">Re-run</button>` : ''}
+            ${isProcessing ? `<button onclick="resetResume(${r.id})" class="text-xs text-orange-600 hover:underline">Reset (stuck)</button>` : ''}
             <button onclick="deleteResume(${r.id})" class="text-xs text-red-500 hover:underline">Delete</button>
           </div>
         </div>
@@ -455,6 +456,12 @@ async function uploadResume() {
 async function rematchResume(id) {
   if (!confirm('Re-run the full diagnosis and job search?')) return;
   await api('/resumes/' + id + '/rematch', { method: 'POST' });
+  loadResumes();
+}
+
+async function resetResume(id) {
+  if (!confirm('Reset this stuck resume to idle? You can then click Re-run to retry.')) return;
+  await api('/resumes/' + id + '/reset', { method: 'POST' });
   loadResumes();
 }
 

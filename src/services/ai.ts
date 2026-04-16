@@ -27,68 +27,40 @@ async function runJson<T>(ai: Ai, system: string, user: string, maxTokens = 3500
 
 // --- STEP 1-5 Resume Diagnosis ---
 
-const DIAGNOSE_SYSTEM = `You are a brutally honest career strategist. A resume needs a comprehensive search plan. Your tone is direct, evidence-based, and never smooths over contradictions. You never use corporate enthusiasm language (no "passionate", "thrilled", "excited").
+const DIAGNOSE_SYSTEM = `You are a brutally honest career strategist. Your tone is direct, evidence-based. Never use corporate enthusiasm language ("passionate", "thrilled", "excited").
 
-Output STRICT JSON matching this schema:
+Output COMPACT JSON. Be concise. No padding text outside the JSON.
+
+Schema:
 {
-  "identities": [
-    {
-      "label": "string (e.g. 'technical PM', 'e-commerce ops lead')",
-      "strength": "strong_on_paper | strong_in_scope | mixed",
-      "evidence": ["specific project/metric/tool from resume"],
-      "liability_notes": "string, optional - where this reading could screen out"
-    }
-  ],
-  "target_titles": ["exact job-board-searchable titles, 8-15 of them across identities"],
-  "keywords": ["ATS/recruiter search terms found in resume"],
+  "identities": [{"label":"...", "strength":"strong_on_paper|strong_in_scope|mixed", "evidence":["..."], "liability_notes":"..."}],
+  "target_titles": ["..."],
   "lanes": {
-    "fast_income": {
-      "description": "contract/staffing/agency realities for this candidate",
-      "target_companies_or_types": ["types or named agencies"],
-      "realistic_timeline": "e.g. '2-4 weeks to first contract'"
-    },
-    "domain_relevant": {
-      "description": "where industry background is an ASSET",
-      "target_companies_or_types": ["specific company types"]
-    },
-    "aspirational": {
-      "description": "stretch roles requiring warm referrals",
-      "target_companies_or_types": ["named companies or types"]
-    }
+    "fast_income": {"description":"...", "target_companies_or_types":["..."], "realistic_timeline":"..."},
+    "domain_relevant": {"description":"...", "target_companies_or_types":["..."]},
+    "aspirational": {"description":"...", "target_companies_or_types":["..."]}
   },
-  "gaps": {
-    "fixable_30d": ["specific gaps fixable quickly"],
-    "fixable_60_90d": ["medium-term gaps"],
-    "structural": ["gaps that won't close without a pivot"]
-  },
-  "ranked_angles": [
-    {
-      "title": "specific job title",
-      "company_type": "describe the company profile",
-      "lane": "fast_income | domain_relevant | aspirational",
-      "why_it_fits": "specific evidence-tied reason",
-      "top_5": true
-    }
-  ],
-  "honest_notes": "one paragraph of direct feedback - overqualified where, underqualified where, mis-qualified where",
-  "skills": ["concrete skills from resume"],
+  "gaps": {"fixable_30d":["..."], "fixable_60_90d":["..."], "structural":["..."]},
+  "ranked_angles": [{"title":"...", "company_type":"...", "lane":"...", "why_it_fits":"...", "top_5":true}],
+  "honest_notes": "one paragraph",
+  "skills": ["..."],
   "experience_years": 0,
-  "summary": "2-sentence summary, no fluff"
+  "summary": "2 sentences"
 }
 
-Rules:
-- Only make claims you can tie to evidence in the resume.
-- Be direct about weaknesses. The user can take it.
-- Flag ambiguity instead of smoothing it over.
-- ranked_angles should have 15-20 entries, with top 5 flagged top_5:true.
-- target_titles must be real, searchable titles (what a recruiter types into LinkedIn).`;
+Constraints:
+- 3-5 identities only
+- 8-12 target_titles (real searchable titles)
+- 10-12 ranked_angles total, with top 5 marked top_5:true
+- Each evidence/note/why_it_fits: ONE sentence max
+- Only claims tied to resume evidence`;
 
 export async function diagnoseResume(ai: Ai, resumeText: string): Promise<ResumeDiagnosis> {
   return runJson<ResumeDiagnosis>(
     ai,
     DIAGNOSE_SYSTEM,
-    `RESUME:\n\n${resumeText}`,
-    4096
+    `RESUME:\n\n${resumeText.slice(0, 8000)}`,
+    2200
   );
 }
 
