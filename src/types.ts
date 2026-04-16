@@ -2,9 +2,23 @@ export interface Env {
   DB: D1Database;
   AI: Ai;
   ASSETS: Fetcher;
+  PIPELINE: Workflow;
   RAPIDAPI_KEY?: string;
   ADZUNA_APP_ID?: string;
   ADZUNA_APP_KEY?: string;
+}
+
+export interface PipelineEvent {
+  id: number;
+  resume_id: number;
+  step_key: string;
+  step_label: string;
+  status: 'pending' | 'running' | 'completed' | 'failed';
+  current_count: number;
+  total_count: number | null;
+  message: string | null;
+  started_at: string;
+  updated_at: string;
 }
 
 export interface Resume {

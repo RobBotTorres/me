@@ -1,6 +1,6 @@
 name = "job-search-agent"
 main = "src/index.ts"
-compatibility_date = "2024-09-23"
+compatibility_date = "2025-06-01"
 compatibility_flags = ["nodejs_compat"]
 
 # Workers AI binding
@@ -12,27 +12,29 @@ binding = "AI"
 binding = "DB"
 database_name = "job-search-db"
 database_id = "f0d3d5af-9ceb-4d4b-b5c3-713b0d462447"
-# Create the database first: npx wrangler d1 create job-search-db
-# Or create it via Cloudflare dashboard, then paste the ID above.
+
+# Cloudflare Workflow for the resume pipeline (durable, auto-retry)
+[[workflows]]
+name = "resume-pipeline"
+binding = "PIPELINE"
+class_name = "ResumePipeline"
 
 # Static assets (frontend dashboard)
-# Default behavior: if path matches an asset, serve it; otherwise run the worker.
-# /api/* routes don't match any asset, so they hit the worker. /  serves index.html.
 [assets]
 directory = "./public"
 binding = "ASSETS"
 not_found_handling = "single-page-application"
 
 [vars]
-# Optional job board API keys (add via dashboard as secrets for production):
+# Optional job board API keys (add via dashboard as secrets):
 #   npx wrangler secret put RAPIDAPI_KEY
 #   npx wrangler secret put ADZUNA_APP_ID
 #   npx wrangler secret put ADZUNA_APP_KEY
 
 # Daily pipeline rerun. Cron expressions are UTC.
 # 0 7 * * *  = 3 AM ET standard time / 2 AM ET daylight time
-# Adjust if you're in a different timezone:
-#   3 AM PT standard = "0 11 * * *"  (10 UTC during daylight time)
+# Adjust for other timezones:
+#   3 AM PT standard = "0 11 * * *"
 #   3 AM CT standard = "0 9 * * *"
 [triggers]
 crons = ["0 7 * * *"]

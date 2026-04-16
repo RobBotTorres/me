@@ -11,9 +11,24 @@ CREATE TABLE IF NOT EXISTS resumes (
   target_titles TEXT DEFAULT '[]',
   processing_status TEXT DEFAULT 'idle',
   processing_error TEXT,
+  workflow_id TEXT,
   created_at TEXT DEFAULT (datetime('now')),
   updated_at TEXT DEFAULT (datetime('now'))
 );
+
+CREATE TABLE IF NOT EXISTS pipeline_events (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  resume_id INTEGER NOT NULL REFERENCES resumes(id) ON DELETE CASCADE,
+  step_key TEXT NOT NULL,
+  step_label TEXT NOT NULL,
+  status TEXT NOT NULL DEFAULT 'pending',
+  current_count INTEGER DEFAULT 0,
+  total_count INTEGER,
+  message TEXT,
+  started_at TEXT DEFAULT (datetime('now')),
+  updated_at TEXT DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_pipeline_events_resume ON pipeline_events(resume_id, id);
 
 CREATE TABLE IF NOT EXISTS jobs (
   id INTEGER PRIMARY KEY AUTOINCREMENT,

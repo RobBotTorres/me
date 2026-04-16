@@ -5,7 +5,8 @@ import jobRoutes from './routes/jobs';
 import resumeRoutes from './routes/resumes';
 import applicationRoutes from './routes/applications';
 import searchRoutes from './routes/search';
-import { runFullPipeline } from './services/matcher';
+
+export { ResumePipeline } from './workflows/resume-pipeline';
 
 const app = new Hono<{ Bindings: Env }>();
 
@@ -16,7 +17,6 @@ app.get('/api/health', (c) => {
 });
 
 app.get('/api/dashboard', async (c) => {
-  // Exclude jobs that already have an application (tracked elsewhere)
   const [jobCount, resumeCount, appCount, pipeline, topJobs, recentApps] = await Promise.all([
     c.env.DB.prepare(
       'SELECT COUNT(*) as count FROM jobs WHERE id NOT IN (SELECT job_id FROM applications)'
@@ -54,10 +54,15 @@ app.post('/api/cron/run', async (c) => {
     "SELECT id FROM resumes WHERE processing_status IN ('complete', 'error', 'idle')"
   ).all<{ id: number }>();
 
+  const triggered: { id: number; workflow_id: string }[] = [];
   for (const r of resumes.results || []) {
-    c.executionCtx.waitUntil(runFullPipeline(c.env, r.id));
+    const instance = await c.env.PIPELINE.create({ params: { resumeId: r.id } });
+    await c.env.DB.prepare(
+      'UPDATE resumes SET workflow_id = ?, processing_status = ? WHERE id = ?'
+    ).bind(instance.id, 'diagnosing', r.id).run();
+    triggered.push({ id: r.id, workflow_id: instance.id });
   }
-  return c.json({ triggered: resumes.results?.length || 0 });
+  return c.json({ triggered });
 });
 
 app.route('/api/jobs', jobRoutes);
@@ -67,13 +72,16 @@ app.route('/api/search', searchRoutes);
 
 export default {
   fetch: app.fetch,
-  async scheduled(_event: ScheduledController, env: Env, ctx: ExecutionContext) {
+  async scheduled(_event: ScheduledController, env: Env, _ctx: ExecutionContext) {
     const resumes = await env.DB.prepare(
       "SELECT id FROM resumes WHERE processing_status IN ('complete', 'error', 'idle')"
     ).all<{ id: number }>();
 
     for (const r of resumes.results || []) {
-      ctx.waitUntil(runFullPipeline(env, r.id));
+      const instance = await env.PIPELINE.create({ params: { resumeId: r.id } });
+      await env.DB.prepare(
+        'UPDATE resumes SET workflow_id = ?, processing_status = ? WHERE id = ?'
+      ).bind(instance.id, 'diagnosing', r.id).run();
     }
   },
 };

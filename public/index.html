@@ -26,6 +26,12 @@
     .card { background: white; border-radius: 0.75rem; box-shadow: 0 1px 3px rgba(0,0,0,0.1); }
     .spinner { border: 2px solid #e5e7eb; border-top-color: #3b82f6; border-radius: 50%; width: 14px; height: 14px; animation: spin 0.8s linear infinite; display: inline-block; vertical-align: middle; }
     @keyframes spin { to { transform: rotate(360deg); } }
+    .step-pending { color: #9ca3af; }
+    .step-running { color: #2563eb; }
+    .step-completed { color: #059669; }
+    .step-failed { color: #dc2626; }
+    .progress-track { height: 6px; background: #e5e7eb; border-radius: 3px; overflow: hidden; }
+    .progress-bar { height: 100%; background: linear-gradient(90deg,#3b82f6,#6366f1); transition: width 0.4s ease; }
   </style>
 </head>
 <body class="min-h-screen">
@@ -340,11 +346,6 @@ async function loadResumes() {
     stopPolling();
     return;
   }
-  const statusLabels = {
-    extracting: 'Extracting skills...', diagnosing: 'Diagnosing resume (STEP 1-5)...',
-    searching: 'Searching job boards...', ranking: 'Ranking and classifying jobs...',
-    complete: '✓ Complete', error: '⚠ Error', idle: '',
-  };
   el.innerHTML = '<h2 class="text-lg font-semibold mb-2">Your Resumes</h2>' + list.map(r => {
     const skills = JSON.parse(r.skills || '[]');
     const identities = JSON.parse(r.career_identities || '[]');
@@ -354,15 +355,12 @@ async function loadResumes() {
     return `
       <div class="card p-5" id="resume-${r.id}">
         <div class="flex items-start justify-between">
-          <div class="flex-1">
+          <div class="flex-1 min-w-0">
             <h3 class="font-semibold">${esc(r.name)}</h3>
-            <div class="text-xs mt-1 flex items-center gap-2">
-              ${isProcessing ? '<span class="spinner"></span>' : ''}
-              <span class="${status === 'error' ? 'text-red-600' : status === 'complete' ? 'text-green-600' : 'text-gray-500'}">${statusLabels[status] || status}</span>
-            </div>
-            ${r.processing_error ? `<p class="text-xs text-red-600 mt-1">${esc(r.processing_error)}</p>` : ''}
+            <p class="text-xs text-gray-400 mt-0.5">${r.experience_years || '?'} years · Added ${new Date(r.created_at).toLocaleDateString()}</p>
+            <div id="progress-${r.id}" class="${isProcessing || status === 'error' ? 'mt-3' : 'hidden'}"></div>
+            ${r.processing_error ? `<p class="text-xs text-red-600 mt-2">${esc(r.processing_error)}</p>` : ''}
             ${r.summary ? `<p class="text-sm text-gray-600 mt-2">${esc(r.summary)}</p>` : ''}
-            <p class="text-xs text-gray-400 mt-1">${r.experience_years || '?'} years · Added ${new Date(r.created_at).toLocaleDateString()}</p>
             ${identities.length ? `<div class="mt-3"><p class="text-xs font-medium text-gray-700">Career Identities:</p><div class="flex flex-wrap gap-1 mt-1">${identities.map(i => `<span class="bg-indigo-50 text-indigo-700 px-2 py-0.5 rounded text-xs">${esc(i.label)}</span>`).join('')}</div></div>` : ''}
             ${targetTitles.length ? `<div class="mt-2"><p class="text-xs font-medium text-gray-700">Target Titles:</p><div class="flex flex-wrap gap-1 mt-1">${targetTitles.slice(0, 10).map(t => `<span class="bg-blue-50 text-blue-700 px-2 py-0.5 rounded text-xs">${esc(t)}</span>`).join('')}</div></div>` : ''}
             ${skills.length ? `<div class="mt-2"><p class="text-xs font-medium text-gray-700">Skills:</p><div class="flex flex-wrap gap-1 mt-1">${skills.slice(0, 15).map(s => `<span class="bg-gray-100 text-gray-700 px-2 py-0.5 rounded text-xs">${esc(s)}</span>`).join('')}</div></div>` : ''}
@@ -370,14 +368,63 @@ async function loadResumes() {
           <div class="flex flex-col gap-2 shrink-0 ml-3">
             ${status === 'complete' ? `<button onclick="viewAnalysis(${r.id})" class="text-xs text-indigo-600 hover:underline">View Analysis</button>` : ''}
             ${!isProcessing ? `<button onclick="rematchResume(${r.id})" class="text-xs text-blue-600 hover:underline">Re-run</button>` : ''}
-            ${isProcessing ? `<button onclick="resetResume(${r.id})" class="text-xs text-orange-600 hover:underline">Reset (stuck)</button>` : ''}
+            ${isProcessing ? `<button onclick="resetResume(${r.id})" class="text-xs text-orange-600 hover:underline">Reset</button>` : ''}
             <button onclick="deleteResume(${r.id})" class="text-xs text-red-500 hover:underline">Delete</button>
           </div>
         </div>
       </div>`;
   }).join('');
+
+  // Load progress for any resume that has/had pipeline activity
+  for (const r of list) {
+    if (['extracting','diagnosing','searching','ranking','error'].includes(r.processing_status)) {
+      loadProgress(r.id);
+    }
+  }
+
   const anyProcessing = list.some(r => ['extracting','diagnosing','searching','ranking'].includes(r.processing_status));
   if (anyProcessing) startPolling(); else stopPolling();
+}
+
+async function loadProgress(resumeId) {
+  try {
+    const data = await api('/resumes/' + resumeId + '/events');
+    const events = data.events || [];
+    const el = document.getElementById('progress-' + resumeId);
+    if (!el) return;
+    if (events.length === 0) { el.classList.add('hidden'); return; }
+
+    const completed = events.filter(e => e.status === 'completed').length;
+    const failed = events.filter(e => e.status === 'failed').length;
+    const total = events.length;
+    const running = events.find(e => e.status === 'running');
+
+    let overallPct = Math.round((completed / total) * 100);
+    if (running && running.total_count) {
+      const batchPct = (running.current_count / running.total_count) * (100 / total);
+      overallPct = Math.min(99, Math.round((completed / total) * 100 + batchPct));
+    }
+    if (failed > 0) overallPct = Math.round((completed / total) * 100);
+
+    const icon = (s) => s === 'completed' ? '✓' : s === 'running' ? '◐' : s === 'failed' ? '✗' : '○';
+
+    el.classList.remove('hidden');
+    el.innerHTML = `
+      <div class="progress-track mb-2"><div class="progress-bar" style="width:${overallPct}%"></div></div>
+      <div class="text-xs space-y-1">
+        ${events.map(e => {
+          const pct = e.total_count && e.current_count ? ` (${e.current_count}/${e.total_count})` : '';
+          const msg = e.message ? ` — ${esc(e.message)}` : '';
+          const cls = `step-${e.status}`;
+          return `<div class="${cls} flex items-center gap-1.5">
+            ${e.status === 'running' ? '<span class="spinner"></span>' : `<span class="inline-block w-3.5 text-center">${icon(e.status)}</span>`}
+            <span>${esc(e.step_label)}${pct}${msg}</span>
+          </div>`;
+        }).join('')}
+      </div>`;
+  } catch (err) {
+    console.error('Progress load error:', err);
+  }
 }
 
 function startPolling() {
