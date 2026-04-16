@@ -16,11 +16,12 @@ database_id = "f0d3d5af-9ceb-4d4b-b5c3-713b0d462447"
 # Or create it via Cloudflare dashboard, then paste the ID above.
 
 # Static assets (frontend dashboard)
+# Default behavior: if path matches an asset, serve it; otherwise run the worker.
+# /api/* routes don't match any asset, so they hit the worker. /  serves index.html.
 [assets]
 directory = "./public"
 binding = "ASSETS"
 not_found_handling = "single-page-application"
-run_worker_first = ["/api/*"]
 
 [vars]
 # Optional job board API keys (add via dashboard as secrets for production):
