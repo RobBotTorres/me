@@ -9,7 +9,7 @@ import { ExternalJob } from '../types';
 async function searchRemotive(query: string): Promise<ExternalJob[]> {
   try {
     const res = await fetch(
-      `https://remotive.com/api/remote-jobs?search=${encodeURIComponent(query)}&limit=20`
+      `https://remotive.com/api/remote-jobs?search=${encodeURIComponent(query)}&limit=50`
     );
     if (!res.ok) return [];
     const data = (await res.json()) as {
@@ -40,7 +40,7 @@ async function searchArbeitnow(query: string): Promise<ExternalJob[]> {
     const data = (await res.json()) as {
       data: Array<{ slug: string; title: string; company_name: string; location: string; description: string; url: string; remote: boolean; created_at: number }>;
     };
-    return data.data.slice(0, 20).map((j) => ({
+    return data.data.slice(0, 50).map((j) => ({
       title: j.title,
       company: j.company_name,
       location: j.location || 'Not specified',
@@ -72,7 +72,7 @@ async function searchRemoteOK(query: string): Promise<ExternalJob[]> {
     const matches = jobs.filter((j) => {
       const hay = `${j.position} ${(j.tags || []).join(' ')} ${j.description || ''}`.toLowerCase();
       return hay.includes(q);
-    }).slice(0, 20);
+    }).slice(0, 50);
     return matches.map((j) => ({
       title: j.position,
       company: j.company,
@@ -108,7 +108,7 @@ async function searchTheMuse(query: string): Promise<ExternalJob[]> {
     const matches = data.results.filter((j) => {
       const hay = `${j.name} ${(j.categories || []).map((c) => c.name).join(' ')} ${j.contents || ''}`.toLowerCase();
       return hay.includes(q);
-    }).slice(0, 15);
+    }).slice(0, 40);
     return matches.map((j) => {
       const locName = j.locations?.[0]?.name || 'Not specified';
       const remote = /remote/i.test(locName);
@@ -132,7 +132,7 @@ async function searchUSAJobs(query: string, location?: string): Promise<External
   try {
     const loc = location ? `&LocationName=${encodeURIComponent(location)}` : '';
     const res = await fetch(
-      `https://data.usajobs.gov/api/search?Keyword=${encodeURIComponent(query)}&ResultsPerPage=15${loc}`,
+      `https://data.usajobs.gov/api/search?Keyword=${encodeURIComponent(query)}&ResultsPerPage=50${loc}`,
       {
         headers: {
           'User-Agent': 'job-search-agent (contact@example.com)',
@@ -191,7 +191,7 @@ async function searchWorkingNomads(query: string): Promise<ExternalJob[]> {
     const matches = jobs.filter((j) => {
       const hay = `${j.title} ${j.category_name} ${j.description || ''}`.toLowerCase();
       return hay.includes(q);
-    }).slice(0, 15);
+    }).slice(0, 40);
     return matches.map((j, i) => ({
       title: j.title,
       company: j.company_name,
@@ -314,7 +314,7 @@ async function searchHackerNews(query: string): Promise<ExternalJob[]> {
 
     // 2. Search comments in that thread
     const commentsRes = await fetch(
-      `https://hn.algolia.com/api/v1/search?query=${encodeURIComponent(query)}&tags=comment,story_${storyId}&hitsPerPage=20`
+      `https://hn.algolia.com/api/v1/search?query=${encodeURIComponent(query)}&tags=comment,story_${storyId}&hitsPerPage=50`
     );
     if (!commentsRes.ok) return [];
     const commentData = (await commentsRes.json()) as {
@@ -353,7 +353,10 @@ async function searchAdzuna(
 ): Promise<ExternalJob[]> {
   if (!appId || !appKey) return [];
   try {
-    const url = `https://api.adzuna.com/v1/api/jobs/us/search/1?app_id=${appId}&app_key=${appKey}&results_per_page=20&what=${encodeURIComponent(query)}&where=${encodeURIComponent(location)}`;
+    // Adzuna US endpoint. Using current docs: /v1/api/jobs/{country}/search/{page}
+    // https://developer.adzuna.com/docs/search
+    const whereParam = location ? `&where=${encodeURIComponent(location)}` : '';
+    const url = `https://api.adzuna.com/v1/api/jobs/us/search/1?app_id=${appId}&app_key=${appKey}&results_per_page=50&what=${encodeURIComponent(query)}${whereParam}`;
     const res = await fetch(url);
     if (!res.ok) return [];
     const data = (await res.json()) as {
@@ -418,19 +421,62 @@ export interface SearchOptions {
   findworkApiKey?: string;
 }
 
-const US_STATES = 'AL|AK|AZ|AR|CA|CO|CT|DE|FL|GA|HI|ID|IL|IN|IA|KS|KY|LA|ME|MD|MA|MI|MN|MS|MO|MT|NE|NV|NH|NJ|NM|NY|NC|ND|OH|OK|OR|PA|RI|SC|SD|TN|TX|UT|VT|VA|WA|WV|WI|WY|DC';
-const US_REGEX = new RegExp(`\\b(USA?|U\\.S\\.?|United States|US-based|Americas|North America|(${US_STATES}))\\b`, 'i');
-const NON_US_REGEX = /\b(United Kingdom|UK\b|Great Britain|Germany|Deutschland|France|Spain|Italy|Netherlands|Sweden|Norway|Denmark|Finland|Portugal|Belgium|Switzerland|Austria|Poland|Ireland|Greece|Turkey|Russia|Ukraine|Canada|Mexico|India|Pakistan|Philippines|Singapore|Malaysia|Indonesia|Thailand|Vietnam|Australia|New Zealand|Brazil|Argentina|Chile|Colombia|Japan|China|Korea|Taiwan|Hong Kong|Israel|UAE|Europe\b|EU\b|EMEA|APAC|LATAM)\b/i;
+const US_STATE_NAMES = 'Alabama|Alaska|Arizona|Arkansas|California|Colorado|Connecticut|Delaware|Florida|Georgia|Hawaii|Idaho|Illinois|Indiana|Iowa|Kansas|Kentucky|Louisiana|Maine|Maryland|Massachusetts|Michigan|Minnesota|Mississippi|Missouri|Montana|Nebraska|Nevada|New Hampshire|New Jersey|New Mexico|New York|North Carolina|North Dakota|Ohio|Oklahoma|Oregon|Pennsylvania|Rhode Island|South Carolina|South Dakota|Tennessee|Texas|Utah|Vermont|Virginia|Washington|West Virginia|Wisconsin|Wyoming';
+
+const US_CITIES = 'San Francisco|New York City|New York|Los Angeles|Chicago|Seattle|Boston|Austin|Miami|Atlanta|Denver|Portland|Philadelphia|Dallas|Houston|Phoenix|San Diego|Minneapolis|Detroit|Nashville|Charlotte|Raleigh|Pittsburgh|Silicon Valley|Bay Area|Washington DC|Washington D\\.C\\.|NYC|SF';
+
+const US_STATE_ABBREVS = 'AL|AK|AZ|AR|CA|CO|CT|DE|FL|GA|HI|ID|IL|IN|IA|KS|KY|LA|ME|MD|MA|MI|MN|MS|MO|MT|NE|NV|NH|NJ|NM|NY|NC|ND|OH|OK|OR|PA|RI|SC|SD|TN|TX|UT|VT|VA|WA|WV|WI|WY|DC';
+
+const US_REGEX = new RegExp(
+  [
+    '\\bUSA?\\b',
+    '\\bU\\.S\\.(A\\.)?',
+    '\\bUnited States\\b',
+    '\\bUS-based\\b',
+    '\\bAmericas\\b',
+    '\\bNorth America\\b',
+    `\\b(${US_STATE_NAMES})\\b`,
+    `\\b(${US_CITIES})\\b`,
+    'Remote[^a-z]{0,5}(US|USA|United States|North America)',
+    'Anywhere in (the )?(US|USA|United States)',
+  ].join('|'),
+  'i'
+);
+
+// Avoid false positives on 2-letter abbrevs ("work IN our office"): require context
+const STATE_ABBREV_IN_CONTEXT = new RegExp(
+  `(,\\s*(${US_STATE_ABBREVS})\\b)|` +
+  `(\\s(${US_STATE_ABBREVS})$)|` +
+  `(\\s(${US_STATE_ABBREVS})\\s*(,|-|\\(|$))`,
+  ''
+);
+
+const NON_US_REGEX = /\b(United Kingdom|\bUK\b|Great Britain|England|Scotland|Wales|Germany|Deutschland|Berlin|Munich|France|Paris|Spain|Madrid|Barcelona|Italy|Rome|Milan|Netherlands|Amsterdam|Sweden|Stockholm|Norway|Oslo|Denmark|Copenhagen|Finland|Helsinki|Portugal|Lisbon|Belgium|Brussels|Switzerland|Zurich|Austria|Vienna|Poland|Warsaw|Ireland|Dublin|Greece|Athens|Turkey|Istanbul|Russia|Ukraine|Kyiv|Canada|Toronto|Vancouver|Montreal|Mexico|Mexico City|India|Bangalore|Bengaluru|Mumbai|Delhi|Hyderabad|Pakistan|Philippines|Manila|Singapore|Malaysia|Kuala Lumpur|Indonesia|Jakarta|Thailand|Bangkok|Vietnam|Australia|Sydney|Melbourne|New Zealand|Auckland|Brazil|Sao Paulo|Argentina|Buenos Aires|Chile|Santiago|Colombia|Bogota|Japan|Tokyo|China|Beijing|Shanghai|Korea|Seoul|Taiwan|Taipei|Hong Kong|Israel|Tel Aviv|UAE|Dubai|\\bEurope\\b|\\bEU\\b|EMEA|APAC|LATAM)\b/i;
 
 function isUSACompatible(job: ExternalJob): boolean {
   const loc = (job.location || '').trim();
-  // Explicit non-US → exclude (unless it also says US)
-  if (NON_US_REGEX.test(loc) && !US_REGEX.test(loc)) return false;
-  if (US_REGEX.test(loc)) return true;
-  // Remote or anywhere → include (US candidates usually eligible)
-  if (job.remote || /remote|anywhere|worldwide|global/i.test(loc)) return true;
-  // Unknown/empty → include to be safe (many boards just don't specify)
-  if (!loc || loc.toLowerCase() === 'not specified') return true;
+  const desc = job.description || '';
+
+  // Strong US signal in location → include
+  if (US_REGEX.test(loc) || STATE_ABBREV_IN_CONTEXT.test(loc)) return true;
+
+  // Strong non-US signal → exclude
+  if (NON_US_REGEX.test(loc)) return false;
+
+  // Remote/worldwide: accept if description mentions US or has no clear non-US signal
+  const looksRemote = job.remote || /remote|anywhere|worldwide|global/i.test(loc);
+  if (looksRemote) {
+    if (NON_US_REGEX.test(desc)) {
+      // But check if description also lists US as eligible
+      return US_REGEX.test(desc);
+    }
+    if (US_REGEX.test(desc)) return true;
+    // Plain "Remote" with no country info: include (most remote roles accept US)
+    if (!loc || /^(remote|worldwide|global|anywhere|not specified)$/i.test(loc)) return true;
+    return false;
+  }
+
+  // Unknown/empty → exclude to be strict
   return false;
 }
 
