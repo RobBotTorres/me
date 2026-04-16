@@ -395,14 +395,17 @@ async function loadResumes() {
   }).join('');
 
   // Load progress for any resume that has/had pipeline activity
+  const pollIds = [];
   for (const r of list) {
     if (['extracting','diagnosing','searching','ranking','error'].includes(r.processing_status)) {
       loadProgress(r.id);
     }
+    if (['extracting','diagnosing','searching','ranking'].includes(r.processing_status)) {
+      pollIds.push(r.id);
+    }
   }
 
-  const anyProcessing = list.some(r => ['extracting','diagnosing','searching','ranking'].includes(r.processing_status));
-  if (anyProcessing) startPolling(); else stopPolling();
+  if (pollIds.length) startPolling(pollIds); else stopPolling();
 }
 
 async function loadProgress(resumeId) {
@@ -410,7 +413,7 @@ async function loadProgress(resumeId) {
     const data = await api('/resumes/' + resumeId + '/events');
     const events = data.events || [];
     const el = document.getElementById('progress-' + resumeId);
-    if (!el) return;
+    if (!el) return null;
 
     const workflowStatus = data.workflow_status;
     const dbStatus = data.processing_status;
@@ -419,7 +422,7 @@ async function loadProgress(resumeId) {
     if (events.length === 0) {
       el.classList.remove('hidden');
       el.innerHTML = header + '<p class="text-xs text-gray-400 italic">No pipeline events yet — workflow may be queued.</p>';
-      return;
+      return dbStatus;
     }
 
     const completed = events.filter(e => e.status === 'completed').length;
@@ -450,19 +453,30 @@ async function loadProgress(resumeId) {
           </div>`;
         }).join('')}
       </div>`;
+    return dbStatus;
   } catch (err) {
     const el = document.getElementById('progress-' + resumeId);
     if (el) {
       el.classList.remove('hidden');
       el.innerHTML = `<p class="text-xs text-red-600">Progress load failed: ${esc(err.message)}</p>`;
     }
+    return null;
   }
 }
 
-function startPolling() {
-  if (pollTimer) return;
-  pollTimer = setInterval(() => {
-    if (!document.getElementById('view-resume').classList.contains('hidden')) loadResumes();
+function startPolling(resumeIds) {
+  stopPolling();
+  const activeIds = new Set(resumeIds);
+  pollTimer = setInterval(async () => {
+    if (document.getElementById('view-resume').classList.contains('hidden')) return;
+    if (activeIds.size === 0) { stopPolling(); return; }
+    for (const id of Array.from(activeIds)) {
+      const status = await loadProgress(id);
+      if (status === 'complete' || status === 'error') {
+        activeIds.delete(id);
+        loadResumes(); // full refresh once so card updates with final data
+      }
+    }
   }, 3000);
 }
 function stopPolling() { if (pollTimer) { clearInterval(pollTimer); pollTimer = null; } }
