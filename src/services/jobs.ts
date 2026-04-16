@@ -410,6 +410,7 @@ export interface SearchOptions {
   query: string;
   location?: string;
   remoteOnly?: boolean;
+  usaOnly?: boolean;
   rapidApiKey?: string;
   adzunaAppId?: string;
   adzunaAppKey?: string;
@@ -417,29 +418,49 @@ export interface SearchOptions {
   findworkApiKey?: string;
 }
 
+const US_STATES = 'AL|AK|AZ|AR|CA|CO|CT|DE|FL|GA|HI|ID|IL|IN|IA|KS|KY|LA|ME|MD|MA|MI|MN|MS|MO|MT|NE|NV|NH|NJ|NM|NY|NC|ND|OH|OK|OR|PA|RI|SC|SD|TN|TX|UT|VT|VA|WA|WV|WI|WY|DC';
+const US_REGEX = new RegExp(`\\b(USA?|U\\.S\\.?|United States|US-based|Americas|North America|(${US_STATES}))\\b`, 'i');
+const NON_US_REGEX = /\b(United Kingdom|UK\b|Great Britain|Germany|Deutschland|France|Spain|Italy|Netherlands|Sweden|Norway|Denmark|Finland|Portugal|Belgium|Switzerland|Austria|Poland|Ireland|Greece|Turkey|Russia|Ukraine|Canada|Mexico|India|Pakistan|Philippines|Singapore|Malaysia|Indonesia|Thailand|Vietnam|Australia|New Zealand|Brazil|Argentina|Chile|Colombia|Japan|China|Korea|Taiwan|Hong Kong|Israel|UAE|Europe\b|EU\b|EMEA|APAC|LATAM)\b/i;
+
+function isUSACompatible(job: ExternalJob): boolean {
+  const loc = (job.location || '').trim();
+  // Explicit non-US → exclude (unless it also says US)
+  if (NON_US_REGEX.test(loc) && !US_REGEX.test(loc)) return false;
+  if (US_REGEX.test(loc)) return true;
+  // Remote or anywhere → include (US candidates usually eligible)
+  if (job.remote || /remote|anywhere|worldwide|global/i.test(loc)) return true;
+  // Unknown/empty → include to be safe (many boards just don't specify)
+  if (!loc || loc.toLowerCase() === 'not specified') return true;
+  return false;
+}
+
 export async function searchJobs(options: SearchOptions): Promise<ExternalJob[]> {
   const {
-    query, location = '', remoteOnly = false,
+    query, location = '', remoteOnly = false, usaOnly = false,
     rapidApiKey, adzunaAppId, adzunaAppKey, joobleApiKey, findworkApiKey,
   } = options;
+
+  // Where supported, pass USA as location hint for richer results
+  const locForAPI = usaOnly && !location ? 'United States' : location;
 
   const sources = await Promise.all([
     searchRemotive(query),
     searchArbeitnow(query),
     searchRemoteOK(query),
     searchTheMuse(query),
-    searchUSAJobs(query, location),
+    searchUSAJobs(query, locForAPI),
     searchWorkingNomads(query),
     searchJobicy(query),
     searchHackerNews(query),
-    searchAdzuna(query, location, adzunaAppId, adzunaAppKey),
-    searchJSearch(query, location, rapidApiKey),
-    searchJooble(query, location, joobleApiKey),
+    searchAdzuna(query, locForAPI, adzunaAppId, adzunaAppKey),
+    searchJSearch(query, locForAPI, rapidApiKey),
+    searchJooble(query, locForAPI, joobleApiKey),
     searchFindwork(query, findworkApiKey),
   ]);
 
   let allJobs = sources.flat();
   if (remoteOnly) allJobs = allJobs.filter((j) => j.remote);
+  if (usaOnly) allJobs = allJobs.filter(isUSACompatible);
 
   const seen = new Set<string>();
   allJobs = allJobs.filter((j) => {

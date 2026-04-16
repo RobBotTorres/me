@@ -154,6 +154,7 @@ export class ResumePipeline extends WorkflowEntrypoint<Env, ResumePipelineParams
           queries.map((q) =>
             searchJobs({
               query: q,
+              usaOnly: true,
               rapidApiKey: this.env.RAPIDAPI_KEY,
               adzunaAppId: this.env.ADZUNA_APP_ID,
               adzunaAppKey: this.env.ADZUNA_APP_KEY,
@@ -162,11 +163,20 @@ export class ResumePipeline extends WorkflowEntrypoint<Env, ResumePipelineParams
             })
           )
         );
-        const deduped = dedupeJobs(searchResults.flat()).slice(0, JOBS_PER_QUERY * queries.length);
+        const flat = searchResults.flat();
+        const deduped = dedupeJobs(flat).slice(0, JOBS_PER_QUERY * queries.length);
+
+        // Per-source tally so we can see which boards returned what
+        const bySource: Record<string, number> = {};
+        for (const j of flat) bySource[j.source] = (bySource[j.source] || 0) + 1;
+        const breakdown = Object.entries(bySource)
+          .sort((a, b) => b[1] - a[1])
+          .map(([s, n]) => `${s}:${n}`).join(', ');
+
         await emitEvent(db, resumeId, 'search', 'completed', {
           current: deduped.length,
           total: queries.length,
-          message: `${deduped.length} unique jobs from ${queries.length} queries`,
+          message: `${deduped.length} unique jobs (${flat.length} raw) — ${breakdown}`,
         });
         return deduped;
       }
