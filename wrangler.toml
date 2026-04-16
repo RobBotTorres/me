@@ -11,7 +11,7 @@ binding = "AI"
 [[d1_databases]]
 binding = "DB"
 database_name = "job-search-db"
-database_id = "YOUR_D1_DATABASE_ID"
+database_id = "f0d3d5af-9ceb-4d4b-b5c3-713b0d462447"
 # Create the database first: npx wrangler d1 create job-search-db
 # Or create it via Cloudflare dashboard, then paste the ID above.
 
