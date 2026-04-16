@@ -15,12 +15,13 @@ import { searchJobs } from '../services/jobs';
 
 export type ResumePipelineParams = { resumeId: number };
 
-// Tuning knobs
-const MAX_QUERIES = 10;
-const JOBS_PER_QUERY = 25;
-const LLM_RANKED_COUNT = 50;        // top N by semantic get LLM rerank (lane + reasoning)
-const SEMANTIC_ONLY_COUNT = 70;     // next N get semantic-only scores, no LLM cost
+// Tuning knobs (constrained by Cloudflare's subrequest limit: 50 free / 1000 paid per step)
+const MAX_QUERIES = 4;
+const JOBS_PER_QUERY = 30;
+const LLM_RANKED_COUNT = 50;
+const SEMANTIC_ONLY_COUNT = 70;
 const RERANK_BATCH_SIZE = 15;
+const EMBED_BATCH = 40;             // bigger batch = fewer subrequests
 
 const STEPS = {
   diagnose: 'Diagnose resume',
@@ -212,12 +213,11 @@ export class ResumePipeline extends WorkflowEntrypoint<Env, ResumePipelineParams
 
         // Track successes; skip failed batches rather than aborting
         const embeddingsMap = new Map<number, number[]>();
-        const BATCH = 10; // smaller batch = more resilient
         let failedBatches = 0;
         let lastError = '';
 
-        for (let i = 0; i < jobTexts.length; i += BATCH) {
-          const slice = jobTexts.slice(i, i + BATCH);
+        for (let i = 0; i < jobTexts.length; i += EMBED_BATCH) {
+          const slice = jobTexts.slice(i, i + EMBED_BATCH);
           try {
             const part = await getEmbeddingsBatch(this.env.AI, slice);
             for (let k = 0; k < part.length; k++) {
@@ -227,11 +227,14 @@ export class ResumePipeline extends WorkflowEntrypoint<Env, ResumePipelineParams
             failedBatches++;
             lastError = err instanceof Error ? err.message : String(err);
           }
-          await emitEvent(db, resumeId, 'embed_jobs', 'running', {
-            current: Math.min(i + BATCH, jobTexts.length),
-            total: jobTexts.length,
-            message: failedBatches > 0 ? `${failedBatches} batches failed so far` : undefined,
-          });
+          // Only emit event every few batches to conserve subrequests
+          if (i === 0 || i + EMBED_BATCH >= jobTexts.length || i % (EMBED_BATCH * 2) === 0) {
+            await emitEvent(db, resumeId, 'embed_jobs', 'running', {
+              current: Math.min(i + EMBED_BATCH, jobTexts.length),
+              total: jobTexts.length,
+              message: failedBatches > 0 ? `${failedBatches} batches failed so far` : undefined,
+            });
+          }
         }
 
         const scored = allJobs
@@ -312,10 +315,13 @@ export class ResumePipeline extends WorkflowEntrypoint<Env, ResumePipelineParams
       );
 
       rankedJobs.push(...batchRanked);
-      await emitEvent(db, resumeId, 'rerank', 'running', {
-        current: Math.min((b + 1) * RERANK_BATCH_SIZE, topForLLM.length),
-        total: topForLLM.length,
-      });
+      // Only emit event every other batch to save subrequests
+      if (b % 2 === 1 || b === totalBatches - 1) {
+        await emitEvent(db, resumeId, 'rerank', 'running', {
+          current: Math.min((b + 1) * RERANK_BATCH_SIZE, topForLLM.length),
+          total: topForLLM.length,
+        });
+      }
     }
 
     // Append semantic-only tier (no LLM cost)
