@@ -75,25 +75,25 @@ export class ResumePipeline extends WorkflowEntrypoint<Env, ResumePipelineParams
     const { resumeId } = event.payload;
     const db = this.env.DB;
 
-    // Clear previous events for a clean display
-    await db.prepare('DELETE FROM pipeline_events WHERE resume_id = ?').bind(resumeId).run();
-
-    // Seed pending rows so the UI shows the full pipeline upfront
-    for (const key of Object.keys(STEPS) as StepKey[]) {
-      await emitEvent(db, resumeId, key, 'pending');
-    }
-
-    const resume = await step.do('load-resume', async () => {
+    // All setup inside step.do so it only runs once (not on every workflow resume)
+    const resume = await step.do('init-and-load', async () => {
+      await db.prepare('DELETE FROM pipeline_events WHERE resume_id = ?').bind(resumeId).run();
+      // Single batched insert for all pending events (1 subrequest vs 5)
+      const seedStmts = (Object.keys(STEPS) as StepKey[]).map((key) =>
+        db.prepare(
+          `INSERT INTO pipeline_events (resume_id, step_key, step_label, status) VALUES (?, ?, ?, 'pending')`
+        ).bind(resumeId, key, STEPS[key])
+      );
+      await db.batch(seedStmts);
+      await db.prepare(
+        `UPDATE resumes SET processing_status = 'diagnosing', processing_error = NULL,
+           updated_at = datetime('now') WHERE id = ?`
+      ).bind(resumeId).run();
       const row = await db.prepare('SELECT * FROM resumes WHERE id = ?')
         .bind(resumeId).first<Resume>();
       if (!row) throw new Error('Resume not found');
       return row;
     });
-
-    await db.prepare(
-      `UPDATE resumes SET processing_status = 'diagnosing', processing_error = NULL,
-         updated_at = datetime('now') WHERE id = ?`
-    ).bind(resumeId).run();
 
     // --- Step 1: Diagnose + embed (parallel inside the step) ---
     const diagnoseResult = await step.do(
@@ -141,24 +141,24 @@ export class ResumePipeline extends WorkflowEntrypoint<Env, ResumePipelineParams
       return;
     }
 
-    await db.prepare(
-      `UPDATE resumes SET processing_status = 'searching', updated_at = datetime('now') WHERE id = ?`
-    ).bind(resumeId).run();
-
-    // Force a suspension so the next step gets a fresh subrequest budget
     await step.sleep('pause-before-search', '1 second');
 
     // --- Step 2: Search boards, one step per query (each = fresh invocation) ---
-    await emitEvent(db, resumeId, 'search', 'running', { total: queries.length });
-
+    // Each query step handles its own event emits to stay inside cached step scope
     const perQueryResults: ExternalJob[][] = [];
     for (let i = 0; i < queries.length; i++) {
       const q = queries[i];
       const result = await step.do(
         `search-query-${i}`,
         { retries: { limit: 2, delay: '3 seconds' }, timeout: '1 minute' },
-        async () =>
-          searchJobs({
+        async () => {
+          if (i === 0) {
+            await db.prepare(
+              `UPDATE resumes SET processing_status = 'searching', updated_at = datetime('now') WHERE id = ?`
+            ).bind(resumeId).run();
+            await emitEvent(db, resumeId, 'search', 'running', { total: queries.length });
+          }
+          const jobs = await searchJobs({
             query: q,
             usaOnly: true,
             rapidApiKey: this.env.RAPIDAPI_KEY,
@@ -166,109 +166,120 @@ export class ResumePipeline extends WorkflowEntrypoint<Env, ResumePipelineParams
             adzunaAppKey: this.env.ADZUNA_APP_KEY,
             joobleApiKey: this.env.JOOBLE_API_KEY,
             findworkApiKey: this.env.FINDWORK_API_KEY,
-          })
+          });
+          await emitEvent(db, resumeId, 'search', 'running', { current: i + 1, total: queries.length });
+          return jobs;
+        }
       );
       perQueryResults.push(result);
-      await emitEvent(db, resumeId, 'search', 'running', {
-        current: i + 1,
-        total: queries.length,
-      });
     }
 
-    const flat = perQueryResults.flat();
-    const allJobs = dedupeJobs(flat).slice(0, JOBS_PER_QUERY * queries.length);
+    // Deduplicate + tally in a step so the D1 writes don't replay
+    const allJobs = await step.do('post-search-aggregate', async () => {
+      const flat = perQueryResults.flat();
+      const deduped = dedupeJobs(flat).slice(0, JOBS_PER_QUERY * queries.length);
 
-    // Per-source tally
-    const bySource: Record<string, number> = {
-      remotive: 0, arbeitnow: 0, remoteok: 0, themuse: 0, usajobs: 0,
-      workingnomads: 0, jobicy: 0, hackernews: 0, adzuna: 0, jsearch: 0,
-      jooble: 0, findwork: 0,
-    };
-    for (const j of flat) bySource[j.source] = (bySource[j.source] || 0) + 1;
-    const breakdown = Object.entries(bySource)
-      .sort((a, b) => b[1] - a[1])
-      .map(([s, n]) => `${s}:${n}`).join(', ');
+      const bySource: Record<string, number> = {
+        remotive: 0, arbeitnow: 0, remoteok: 0, themuse: 0, usajobs: 0,
+        workingnomads: 0, jobicy: 0, hackernews: 0, adzuna: 0, jsearch: 0,
+        jooble: 0, findwork: 0,
+      };
+      for (const j of flat) bySource[j.source] = (bySource[j.source] || 0) + 1;
+      const breakdown = Object.entries(bySource)
+        .sort((a, b) => b[1] - a[1])
+        .map(([s, n]) => `${s}:${n}`).join(', ');
 
-    await emitEvent(db, resumeId, 'search', 'completed', {
-      current: allJobs.length,
-      total: queries.length,
-      message: `${allJobs.length} unique (${flat.length} raw) — ${breakdown}`,
+      await emitEvent(db, resumeId, 'search', 'completed', {
+        current: deduped.length,
+        total: queries.length,
+        message: `${deduped.length} unique (${flat.length} raw) — ${breakdown}`,
+      });
+      await db.prepare(
+        `UPDATE resumes SET processing_status = 'ranking', updated_at = datetime('now') WHERE id = ?`
+      ).bind(resumeId).run();
+      return deduped;
     });
 
     if (allJobs.length === 0) {
-      await emitEvent(db, resumeId, 'embed_jobs', 'completed', { message: 'No jobs found' });
-      await emitEvent(db, resumeId, 'rerank', 'completed', { message: 'No jobs to rank' });
-      await emitEvent(db, resumeId, 'save', 'completed', { message: 'Nothing to save' });
+      await step.do('no-jobs-found', async () => {
+        await emitEvent(db, resumeId, 'embed_jobs', 'completed', { message: 'No jobs found' });
+        await emitEvent(db, resumeId, 'rerank', 'completed', { message: 'No jobs to rank' });
+        await emitEvent(db, resumeId, 'save', 'completed', { message: 'Nothing to save' });
+      });
       await this.finish(resumeId);
       return;
     }
 
-    await db.prepare(
-      `UPDATE resumes SET processing_status = 'ranking', updated_at = datetime('now') WHERE id = ?`
-    ).bind(resumeId).run();
-
-    // Another suspension → fresh subrequest budget for embed
     await step.sleep('pause-before-embed', '1 second');
 
-    // --- Step 3: Embed jobs (resilient per-batch; one bad batch doesn't kill step) ---
-    const scored = await step.do(
-      'embed-jobs',
-      { retries: { limit: 2, delay: '10 seconds' }, timeout: '5 minutes' },
-      async () => {
-        await emitEvent(db, resumeId, 'embed_jobs', 'running', { current: 0, total: allJobs.length });
+    // --- Step 3: Embed jobs (each batch = its own step → fresh subrequest budget per batch) ---
+    const jobTexts = allJobs.map((j) =>
+      `${j.title} at ${j.company}\n${(j.description || '').slice(0, 1500)}`
+    );
+    const numBatches = Math.ceil(jobTexts.length / EMBED_BATCH);
 
-        // Build texts, truncate aggressively to avoid payload errors
-        const jobTexts = allJobs.map((j) =>
-          `${j.title} at ${j.company}\n${(j.description || '').slice(0, 1500)}`
-        );
+    // Kick off with running status (its own tiny step)
+    await step.do('embed-start', async () => {
+      await emitEvent(db, resumeId, 'embed_jobs', 'running', {
+        current: 0, total: jobTexts.length,
+        message: `${numBatches} batches of ${EMBED_BATCH}`,
+      });
+    });
 
-        // Track successes; skip failed batches rather than aborting
-        const embeddingsMap = new Map<number, number[]>();
-        let failedBatches = 0;
-        let lastError = '';
+    const embeddingsMap = new Map<number, number[]>();
+    let failedBatches = 0;
+    let lastError = '';
 
-        for (let i = 0; i < jobTexts.length; i += EMBED_BATCH) {
-          const slice = jobTexts.slice(i, i + EMBED_BATCH);
+    for (let b = 0; b < numBatches; b++) {
+      const i = b * EMBED_BATCH;
+      const slice = jobTexts.slice(i, i + EMBED_BATCH);
+      const result = await step.do(
+        `embed-batch-${b}`,
+        { retries: { limit: 2, delay: '5 seconds' }, timeout: '2 minutes' },
+        async () => {
           try {
             const part = await getEmbeddingsBatch(this.env.AI, slice);
-            for (let k = 0; k < part.length; k++) {
-              embeddingsMap.set(i + k, part[k]);
-            }
+            return { ok: true as const, embeddings: part };
           } catch (err) {
-            failedBatches++;
-            lastError = err instanceof Error ? err.message : String(err);
-          }
-          // Only emit event every few batches to conserve subrequests
-          if (i === 0 || i + EMBED_BATCH >= jobTexts.length || i % (EMBED_BATCH * 2) === 0) {
-            await emitEvent(db, resumeId, 'embed_jobs', 'running', {
-              current: Math.min(i + EMBED_BATCH, jobTexts.length),
-              total: jobTexts.length,
-              message: failedBatches > 0 ? `${failedBatches} batches failed so far` : undefined,
-            });
+            return { ok: false as const, error: err instanceof Error ? err.message : String(err) };
           }
         }
-
-        const scored = allJobs
-          .map((job, i) => {
-            const emb = embeddingsMap.get(i);
-            if (!emb) return null;
-            return { job, embedding: emb, semantic: cosineSimilarity(resumeEmbedding, emb) };
-          })
-          .filter((x): x is { job: ExternalJob; embedding: number[]; semantic: number } => x !== null);
-
-        if (scored.length === 0) {
-          throw new Error(`All ${jobTexts.length} embedding batches failed. Last error: ${lastError || 'unknown'}`);
+      );
+      if (result.ok) {
+        for (let k = 0; k < result.embeddings.length; k++) {
+          embeddingsMap.set(i + k, result.embeddings[k]);
         }
-
-        scored.sort((a, b) => b.semantic - a.semantic);
-        const totalKept = LLM_RANKED_COUNT + SEMANTIC_ONLY_COUNT;
-        await emitEvent(db, resumeId, 'embed_jobs', 'completed', {
-          current: scored.length, total: allJobs.length,
-          message: `Embedded ${scored.length}/${allJobs.length}${failedBatches ? `, ${failedBatches} batches failed` : ''}; top ${Math.min(totalKept, scored.length)} kept`,
-        });
-        return scored.slice(0, totalKept);
+      } else {
+        failedBatches++;
+        lastError = result.error;
       }
-    );
+    }
+
+    // Aggregate + save step
+    const scored = await step.do('embed-finalize', async () => {
+      const out = allJobs
+        .map((job, i) => {
+          const emb = embeddingsMap.get(i);
+          if (!emb) return null;
+          return { job, embedding: emb, semantic: cosineSimilarity(resumeEmbedding, emb) };
+        })
+        .filter((x): x is { job: ExternalJob; embedding: number[]; semantic: number } => x !== null);
+
+      if (out.length === 0) {
+        await emitEvent(db, resumeId, 'embed_jobs', 'failed', {
+          message: `All ${numBatches} batches failed. Last error: ${lastError || 'unknown'}`,
+        });
+        throw new Error(`All ${numBatches} embedding batches failed. Last error: ${lastError || 'unknown'}`);
+      }
+
+      out.sort((a, b) => b.semantic - a.semantic);
+      const totalKept = LLM_RANKED_COUNT + SEMANTIC_ONLY_COUNT;
+      await emitEvent(db, resumeId, 'embed_jobs', 'completed', {
+        current: out.length, total: allJobs.length,
+        message: `Embedded ${out.length}/${allJobs.length}${failedBatches ? `, ${failedBatches} batches failed` : ''}; top ${Math.min(totalKept, out.length)} kept`,
+      });
+      return out.slice(0, totalKept);
+    });
 
     // --- Step 4: Hybrid ranking ---
     // Top LLM_RANKED_COUNT get full LLM rerank (lane + reasoning)

@@ -26,6 +26,32 @@ app.get('/api/health', (c) => {
   return c.json({ status: 'ok', service: 'job-search-agent', timestamp: new Date().toISOString() });
 });
 
+// Test endpoint: hit embedding directly so we can isolate whether Workers AI works
+app.post('/api/test/embed', async (c) => {
+  const body = await c.req.json<{ texts?: string[]; count?: number }>().catch(() => ({}));
+  const count = body.count || 40;
+  const texts = body.texts || Array.from({ length: count }, (_, i) => `test job ${i} content`);
+  const start = Date.now();
+  try {
+    const response = await c.env.AI.run('@cf/baai/bge-base-en-v1.5', { text: texts });
+    const data = (response as { data: number[][] }).data;
+    return c.json({
+      ok: true,
+      inputs: texts.length,
+      embeddings_returned: data.length,
+      vector_dim: data[0]?.length,
+      ms: Date.now() - start,
+    });
+  } catch (err) {
+    return c.json({
+      ok: false,
+      inputs: texts.length,
+      ms: Date.now() - start,
+      error: err instanceof Error ? err.message : String(err),
+    }, 500);
+  }
+});
+
 // Diagnostics: check schema + bindings
 app.get('/api/diagnostics', async (c) => {
   const checks: Record<string, { ok: boolean; detail?: string }> = {};
