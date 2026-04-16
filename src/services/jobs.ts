@@ -1,187 +1,267 @@
 import { ExternalJob } from '../types';
 
 /**
- * Job search service that aggregates results from multiple free job board APIs.
- *
- * Supported sources:
- * - Remotive (free, no key needed) - remote jobs
- * - Arbeitnow (free, no key needed) - general jobs
- * - Adzuna (free tier, key required) - large job aggregator
- * - JSearch via RapidAPI (freemium, key required) - LinkedIn/Indeed/etc
+ * Aggregates jobs from multiple free/freemium boards.
+ * All sources run in parallel. Each source catches its own errors so a single failure doesn't kill the batch.
  */
 
-// --- Remotive (free, no API key) ---
+// --- Remotive ---
 async function searchRemotive(query: string): Promise<ExternalJob[]> {
   try {
-    const url = `https://remotive.com/api/remote-jobs?search=${encodeURIComponent(query)}&limit=20`;
-    const res = await fetch(url);
+    const res = await fetch(
+      `https://remotive.com/api/remote-jobs?search=${encodeURIComponent(query)}&limit=20`
+    );
     if (!res.ok) return [];
-
     const data = (await res.json()) as {
-      jobs: Array<{
-        id: number;
-        title: string;
-        company_name: string;
-        candidate_required_location: string;
-        description: string;
-        url: string;
-        salary: string;
-        job_type: string;
-        publication_date: string;
-      }>;
+      jobs: Array<{ id: number; title: string; company_name: string; candidate_required_location: string; description: string; url: string; job_type: string; publication_date: string }>;
     };
-
-    return data.jobs.map((job) => ({
-      title: job.title,
-      company: job.company_name,
-      location: job.candidate_required_location || 'Remote',
-      description: stripHtml(job.description),
-      url: job.url,
+    return data.jobs.map((j) => ({
+      title: j.title,
+      company: j.company_name,
+      location: j.candidate_required_location || 'Remote',
+      description: stripHtml(j.description),
+      url: j.url,
       remote: true,
-      job_type: job.job_type || 'full-time',
+      job_type: j.job_type || 'full-time',
       source: 'remotive',
-      external_id: `remotive-${job.id}`,
-      posted_at: job.publication_date,
+      external_id: `remotive-${j.id}`,
+      posted_at: j.publication_date,
     }));
-  } catch {
-    return [];
-  }
+  } catch { return []; }
 }
 
-// --- Arbeitnow (free, no API key) ---
+// --- Arbeitnow ---
 async function searchArbeitnow(query: string): Promise<ExternalJob[]> {
   try {
-    const url = `https://www.arbeitnow.com/api/job-board-api?search=${encodeURIComponent(query)}`;
-    const res = await fetch(url);
+    const res = await fetch(
+      `https://www.arbeitnow.com/api/job-board-api?search=${encodeURIComponent(query)}`
+    );
     if (!res.ok) return [];
-
     const data = (await res.json()) as {
-      data: Array<{
-        slug: string;
-        title: string;
-        company_name: string;
-        location: string;
-        description: string;
-        url: string;
-        remote: boolean;
-        created_at: number;
-        tags: string[];
+      data: Array<{ slug: string; title: string; company_name: string; location: string; description: string; url: string; remote: boolean; created_at: number }>;
+    };
+    return data.data.slice(0, 20).map((j) => ({
+      title: j.title,
+      company: j.company_name,
+      location: j.location || 'Not specified',
+      description: stripHtml(j.description),
+      url: j.url,
+      remote: j.remote,
+      source: 'arbeitnow',
+      external_id: `arbeitnow-${j.slug}`,
+      posted_at: new Date(j.created_at * 1000).toISOString(),
+    }));
+  } catch { return []; }
+}
+
+// --- RemoteOK (free, no auth) ---
+async function searchRemoteOK(query: string): Promise<ExternalJob[]> {
+  try {
+    // RemoteOK returns ALL jobs; we filter client-side. First element is metadata.
+    const res = await fetch('https://remoteok.com/api', {
+      headers: { 'User-Agent': 'job-search-agent' },
+    });
+    if (!res.ok) return [];
+    const raw = (await res.json()) as unknown[];
+    const jobs = raw.slice(1) as Array<{
+      id: string; position: string; company: string; location: string;
+      description: string; url: string; tags: string[]; date: string;
+      salary_min?: number; salary_max?: number;
+    }>;
+    const q = query.toLowerCase();
+    const matches = jobs.filter((j) => {
+      const hay = `${j.position} ${(j.tags || []).join(' ')} ${j.description || ''}`.toLowerCase();
+      return hay.includes(q);
+    }).slice(0, 20);
+    return matches.map((j) => ({
+      title: j.position,
+      company: j.company,
+      location: j.location || 'Remote',
+      description: stripHtml(j.description || ''),
+      url: j.url,
+      remote: true,
+      salary_min: j.salary_min,
+      salary_max: j.salary_max,
+      source: 'remoteok',
+      external_id: `remoteok-${j.id}`,
+      posted_at: j.date,
+    }));
+  } catch { return []; }
+}
+
+// --- The Muse (free, no auth) ---
+async function searchTheMuse(query: string): Promise<ExternalJob[]> {
+  try {
+    // Muse doesn't do keyword search via URL param well; we fetch page 1 and filter.
+    const res = await fetch(
+      `https://www.themuse.com/api/public/jobs?page=1&descending=true`
+    );
+    if (!res.ok) return [];
+    const data = (await res.json()) as {
+      results: Array<{
+        id: number; name: string; contents: string; refs: { landing_page: string };
+        company: { name: string }; locations: Array<{ name: string }>;
+        categories: Array<{ name: string }>; publication_date: string;
       }>;
     };
+    const q = query.toLowerCase();
+    const matches = data.results.filter((j) => {
+      const hay = `${j.name} ${(j.categories || []).map((c) => c.name).join(' ')} ${j.contents || ''}`.toLowerCase();
+      return hay.includes(q);
+    }).slice(0, 15);
+    return matches.map((j) => {
+      const locName = j.locations?.[0]?.name || 'Not specified';
+      const remote = /remote/i.test(locName);
+      return {
+        title: j.name,
+        company: j.company.name,
+        location: locName,
+        description: stripHtml(j.contents || ''),
+        url: j.refs.landing_page,
+        remote,
+        source: 'themuse',
+        external_id: `themuse-${j.id}`,
+        posted_at: j.publication_date,
+      };
+    });
+  } catch { return []; }
+}
 
-    return data.data.slice(0, 20).map((job) => ({
-      title: job.title,
-      company: job.company_name,
-      location: job.location || 'Not specified',
-      description: stripHtml(job.description),
-      url: job.url,
-      remote: job.remote,
-      source: 'arbeitnow',
-      external_id: `arbeitnow-${job.slug}`,
-      posted_at: new Date(job.created_at * 1000).toISOString(),
+// --- USAJobs (free, User-Agent required) ---
+async function searchUSAJobs(query: string, location?: string): Promise<ExternalJob[]> {
+  try {
+    const loc = location ? `&LocationName=${encodeURIComponent(location)}` : '';
+    const res = await fetch(
+      `https://data.usajobs.gov/api/search?Keyword=${encodeURIComponent(query)}&ResultsPerPage=15${loc}`,
+      {
+        headers: {
+          'User-Agent': 'job-search-agent (contact@example.com)',
+          'Host': 'data.usajobs.gov',
+        },
+      }
+    );
+    if (!res.ok) return [];
+    const data = (await res.json()) as {
+      SearchResult: {
+        SearchResultItems: Array<{
+          MatchedObjectId: string;
+          MatchedObjectDescriptor: {
+            PositionTitle: string;
+            OrganizationName: string;
+            PositionLocationDisplay: string;
+            QualificationSummary: string;
+            UserArea?: { Details?: { JobSummary?: string } };
+            PositionURI: string;
+            PositionRemuneration?: Array<{ MinimumRange?: string; MaximumRange?: string }>;
+            PublicationStartDate: string;
+          };
+        }>;
+      };
+    };
+    return (data.SearchResult?.SearchResultItems || []).map((item) => {
+      const d = item.MatchedObjectDescriptor;
+      const rem = d.PositionRemuneration?.[0];
+      return {
+        title: d.PositionTitle,
+        company: d.OrganizationName,
+        location: d.PositionLocationDisplay,
+        description: stripHtml(d.UserArea?.Details?.JobSummary || d.QualificationSummary || ''),
+        url: d.PositionURI,
+        salary_min: rem?.MinimumRange ? parseInt(rem.MinimumRange) : undefined,
+        salary_max: rem?.MaximumRange ? parseInt(rem.MaximumRange) : undefined,
+        remote: /remote|telework/i.test(d.PositionLocationDisplay),
+        source: 'usajobs',
+        external_id: `usajobs-${item.MatchedObjectId}`,
+        posted_at: d.PublicationStartDate,
+      };
+    });
+  } catch { return []; }
+}
+
+// --- Working Nomads (free, remote-only) ---
+async function searchWorkingNomads(query: string): Promise<ExternalJob[]> {
+  try {
+    const res = await fetch('https://www.workingnomads.com/api/exposed_jobs/');
+    if (!res.ok) return [];
+    const jobs = (await res.json()) as Array<{
+      title: string; company_name: string; location: string; description: string;
+      url: string; category_name: string; pub_date: string;
+    }>;
+    const q = query.toLowerCase();
+    const matches = jobs.filter((j) => {
+      const hay = `${j.title} ${j.category_name} ${j.description || ''}`.toLowerCase();
+      return hay.includes(q);
+    }).slice(0, 15);
+    return matches.map((j, i) => ({
+      title: j.title,
+      company: j.company_name,
+      location: j.location || 'Remote',
+      description: stripHtml(j.description || ''),
+      url: j.url,
+      remote: true,
+      source: 'workingnomads',
+      external_id: `workingnomads-${j.url || i}`,
+      posted_at: j.pub_date,
     }));
-  } catch {
-    return [];
-  }
+  } catch { return []; }
 }
 
 // --- Adzuna (requires free API key) ---
 async function searchAdzuna(
-  query: string,
-  location: string,
-  appId?: string,
-  appKey?: string
+  query: string, location: string, appId?: string, appKey?: string
 ): Promise<ExternalJob[]> {
   if (!appId || !appKey) return [];
-
   try {
-    const country = 'us';
-    const url = `https://api.adzuna.com/v1/api/jobs/${country}/search/1?app_id=${appId}&app_key=${appKey}&results_per_page=20&what=${encodeURIComponent(query)}&where=${encodeURIComponent(location)}`;
+    const url = `https://api.adzuna.com/v1/api/jobs/us/search/1?app_id=${appId}&app_key=${appKey}&results_per_page=20&what=${encodeURIComponent(query)}&where=${encodeURIComponent(location)}`;
     const res = await fetch(url);
     if (!res.ok) return [];
-
     const data = (await res.json()) as {
-      results: Array<{
-        id: string;
-        title: string;
-        company: { display_name: string };
-        location: { display_name: string };
-        description: string;
-        redirect_url: string;
-        salary_min?: number;
-        salary_max?: number;
-        contract_type?: string;
-        created: string;
-      }>;
+      results: Array<{ id: string; title: string; company: { display_name: string }; location: { display_name: string }; description: string; redirect_url: string; salary_min?: number; salary_max?: number; contract_type?: string; created: string }>;
     };
-
-    return data.results.map((job) => ({
-      title: job.title,
-      company: job.company.display_name,
-      location: job.location.display_name,
-      description: job.description,
-      url: job.redirect_url,
-      salary_min: job.salary_min,
-      salary_max: job.salary_max,
-      job_type: job.contract_type || 'full-time',
+    return data.results.map((j) => ({
+      title: j.title,
+      company: j.company.display_name,
+      location: j.location.display_name,
+      description: j.description,
+      url: j.redirect_url,
+      salary_min: j.salary_min,
+      salary_max: j.salary_max,
+      job_type: j.contract_type || 'full-time',
       source: 'adzuna',
-      external_id: `adzuna-${job.id}`,
-      posted_at: job.created,
+      external_id: `adzuna-${j.id}`,
+      posted_at: j.created,
     }));
-  } catch {
-    return [];
-  }
+  } catch { return []; }
 }
 
 // --- JSearch via RapidAPI (requires key) ---
 async function searchJSearch(query: string, location: string, apiKey?: string): Promise<ExternalJob[]> {
   if (!apiKey) return [];
-
   try {
     const searchQuery = location ? `${query} in ${location}` : query;
-    const url = `https://jsearch.p.rapidapi.com/search?query=${encodeURIComponent(searchQuery)}&num_pages=1`;
-    const res = await fetch(url, {
-      headers: {
-        'X-RapidAPI-Key': apiKey,
-        'X-RapidAPI-Host': 'jsearch.p.rapidapi.com',
-      },
-    });
+    const res = await fetch(
+      `https://jsearch.p.rapidapi.com/search?query=${encodeURIComponent(searchQuery)}&num_pages=1`,
+      { headers: { 'X-RapidAPI-Key': apiKey, 'X-RapidAPI-Host': 'jsearch.p.rapidapi.com' } }
+    );
     if (!res.ok) return [];
-
     const data = (await res.json()) as {
-      data: Array<{
-        job_id: string;
-        job_title: string;
-        employer_name: string;
-        job_city: string;
-        job_state: string;
-        job_description: string;
-        job_apply_link: string;
-        job_min_salary: number | null;
-        job_max_salary: number | null;
-        job_employment_type: string;
-        job_is_remote: boolean;
-        job_posted_at_datetime_utc: string;
-      }>;
+      data: Array<{ job_id: string; job_title: string; employer_name: string; job_city: string; job_state: string; job_description: string; job_apply_link: string; job_min_salary: number | null; job_max_salary: number | null; job_employment_type: string; job_is_remote: boolean; job_posted_at_datetime_utc: string }>;
     };
-
-    return (data.data || []).map((job) => ({
-      title: job.job_title,
-      company: job.employer_name,
-      location: [job.job_city, job.job_state].filter(Boolean).join(', ') || 'Not specified',
-      description: job.job_description,
-      url: job.job_apply_link,
-      salary_min: job.job_min_salary ?? undefined,
-      salary_max: job.job_max_salary ?? undefined,
-      job_type: job.job_employment_type?.toLowerCase() || 'full-time',
-      remote: job.job_is_remote,
+    return (data.data || []).map((j) => ({
+      title: j.job_title,
+      company: j.employer_name,
+      location: [j.job_city, j.job_state].filter(Boolean).join(', ') || 'Not specified',
+      description: j.job_description,
+      url: j.job_apply_link,
+      salary_min: j.job_min_salary ?? undefined,
+      salary_max: j.job_max_salary ?? undefined,
+      job_type: j.job_employment_type?.toLowerCase() || 'full-time',
+      remote: j.job_is_remote,
       source: 'jsearch',
-      external_id: `jsearch-${job.job_id}`,
-      posted_at: job.job_posted_at_datetime_utc,
+      external_id: `jsearch-${j.job_id}`,
+      posted_at: j.job_posted_at_datetime_utc,
     }));
-  } catch {
-    return [];
-  }
+  } catch { return []; }
 }
 
 // --- Aggregated search ---
@@ -197,24 +277,23 @@ export interface SearchOptions {
 export async function searchJobs(options: SearchOptions): Promise<ExternalJob[]> {
   const { query, location = '', remoteOnly = false, rapidApiKey, adzunaAppId, adzunaAppKey } = options;
 
-  // Run all searches in parallel
-  const [remotiveJobs, arbeitnowJobs, adzunaJobs, jsearchJobs] = await Promise.all([
+  const sources = await Promise.all([
     searchRemotive(query),
     searchArbeitnow(query),
+    searchRemoteOK(query),
+    searchTheMuse(query),
+    searchUSAJobs(query, location),
+    searchWorkingNomads(query),
     searchAdzuna(query, location, adzunaAppId, adzunaAppKey),
     searchJSearch(query, location, rapidApiKey),
   ]);
 
-  let allJobs = [...remotiveJobs, ...arbeitnowJobs, ...adzunaJobs, ...jsearchJobs];
+  let allJobs = sources.flat();
+  if (remoteOnly) allJobs = allJobs.filter((j) => j.remote);
 
-  if (remoteOnly) {
-    allJobs = allJobs.filter((job) => job.remote);
-  }
-
-  // Deduplicate by title + company
   const seen = new Set<string>();
-  allJobs = allJobs.filter((job) => {
-    const key = `${job.title.toLowerCase()}|${job.company.toLowerCase()}`;
+  allJobs = allJobs.filter((j) => {
+    const key = `${j.title.toLowerCase()}|${j.company.toLowerCase()}`;
     if (seen.has(key)) return false;
     seen.add(key);
     return true;

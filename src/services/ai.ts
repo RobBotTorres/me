@@ -94,7 +94,7 @@ export async function diagnoseResume(ai: Ai, resumeText: string): Promise<Resume
 
 // --- Job Reranking with Lane Classification ---
 
-const RERANK_SYSTEM = `You are a job-match strategist. You see a candidate's full diagnosis and a batch of jobs. Score each job 0-100 for fit, assign a lane, and give one-sentence reasoning tied to evidence.
+const RERANK_SYSTEM = `You are a job-match strategist. You see a candidate's full diagnosis and a batch of jobs. Score each job 0-100 for fit, assign a lane, give one-sentence reasoning tied to evidence, and extract 3-7 key skills from the job description.
 
 Lanes:
 - fast_income: contract/agency/quick-onboarding role the candidate can realistically land in weeks
@@ -104,21 +104,30 @@ Lanes:
 Output STRICT JSON:
 {
   "results": [
-    { "job_index": 0, "score": 0-100, "lane": "fast_income|domain_relevant|aspirational", "reasoning": "one sentence" }
+    { "job_index": 0, "score": 0-100, "lane": "fast_income|domain_relevant|aspirational", "reasoning": "one sentence", "skills": ["skill1", "skill2"] }
   ]
 }
 
 Rules:
 - Be honest about low scores. Don't inflate.
 - If the job description is too thin to judge, score it max 40.
-- Reasoning must cite specific resume or job details.`;
+- Reasoning must cite specific resume or job details.
+- Skills: only pull what's actually in the job description. No guessing.`;
+
+export interface JobRerankResultExt {
+  job_index: number;
+  score: number;
+  lane: JobLane;
+  reasoning: string;
+  skills?: string[];
+}
 
 export async function rerankJobs(
   ai: Ai,
   diagnosis: ResumeDiagnosis,
   resumeText: string,
   jobs: { title: string; company: string; description: string }[]
-): Promise<JobRerankResult[]> {
+): Promise<JobRerankResultExt[]> {
   if (jobs.length === 0) return [];
 
   const diagSummary = {
@@ -128,13 +137,10 @@ export async function rerankJobs(
   };
 
   const jobBlocks = jobs
-    .map(
-      (j, i) =>
-        `[${i}] ${j.title} @ ${j.company}\n${(j.description || '').slice(0, 800)}`
-    )
+    .map((j, i) => `[${i}] ${j.title} @ ${j.company}\n${(j.description || '').slice(0, 800)}`)
     .join('\n\n---\n\n');
 
-  const result = await runJson<{ results: JobRerankResult[] }>(
+  const result = await runJson<{ results: JobRerankResultExt[] }>(
     ai,
     RERANK_SYSTEM,
     `CANDIDATE DIAGNOSIS:
