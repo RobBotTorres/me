@@ -218,33 +218,35 @@ export class ResumePipeline extends WorkflowEntrypoint<Env, ResumePipelineParams
         await emitEvent(db, resumeId, 'embed_jobs', 'running', {
           current: 0, total: jobTexts.length,
         });
-        // Workers AI bge-base supports ~100 texts per call. Use 2 calls for ~120 jobs.
+        // Workers AI bge-base supports ~100 texts per call.
         const BATCH = 90;
         const embeddings: number[][] = [];
         for (let i = 0; i < jobTexts.length; i += BATCH) {
           const part = await getEmbeddingsBatch(this.env.AI, jobTexts.slice(i, i + BATCH));
           embeddings.push(...part);
         }
-        const out = allJobs
+        const scoredAll = allJobs
           .map((job, i) => {
             const emb = embeddings[i];
             if (!emb) return null;
-            return { job, embedding: emb, semantic: cosineSimilarity(resumeEmbedding, emb) };
+            return { job, semantic: cosineSimilarity(resumeEmbedding, emb) };
           })
-          .filter((x): x is { job: ExternalJob; embedding: number[]; semantic: number } => x !== null);
-        out.sort((a, b) => b.semantic - a.semantic);
+          .filter((x): x is { job: ExternalJob; semantic: number } => x !== null);
+        scoredAll.sort((a, b) => b.semantic - a.semantic);
         const totalKept = LLM_RANKED_COUNT + SEMANTIC_ONLY_COUNT;
         await emitEvent(db, resumeId, 'embed_jobs', 'completed', {
-          current: out.length, total: allJobs.length,
-          message: `Embedded ${out.length}/${allJobs.length}; top ${Math.min(totalKept, out.length)} kept`,
+          current: scoredAll.length, total: allJobs.length,
+          message: `Embedded ${scoredAll.length}/${allJobs.length}; top ${Math.min(totalKept, scoredAll.length)} kept`,
         });
-        return out.slice(0, totalKept);
+        // Return WITHOUT embeddings - they're too large for workflow step output (1 MiB cap).
+        // Jobs saved without embedding vectors; can be re-embedded if needed.
+        return scoredAll.slice(0, totalKept);
       }
     );
 
     // ---- Step 4: Rerank (direct ai.run, batched inside the step) ----
     type RankedJob = {
-      job: ExternalJob; embedding: number[]; semantic: number;
+      job: ExternalJob; semantic: number;
       score: number; lane: JobLane | null; reasoning: string; skills: string[];
     };
 
@@ -372,7 +374,7 @@ export class ResumePipeline extends WorkflowEntrypoint<Env, ResumePipelineParams
                 r.job.remote ? 1 : 0,
                 r.job.source,
                 JSON.stringify(r.skills),
-                JSON.stringify(r.embedding),
+                null, // embedding not stored (too large to pass through workflow; can re-compute)
                 r.score, r.reasoning, r.semantic, r.lane,
                 resumeId,
                 r.job.posted_at || null
