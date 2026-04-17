@@ -15,16 +15,13 @@ import { searchJobs } from '../services/jobs';
 
 export type ResumePipelineParams = { resumeId: number };
 
-// Tuning knobs. CF Workflows subrequest limit: 50 free / 10000 paid PER INSTANCE (cumulative).
-// step.sleep does NOT reset the budget. Budget targets below aim to fit under 50 for free users.
-//   init: ~3  | diagnose: ~4 (2 AI + 2 D1)  | search: ~17 (5 src × 3 query + events)
-//   post: ~2  | embed: ~3 (1 AI + 2 events) | rerank: ~8 (4 AI + 4 events)
-//   save: ~5  | TOTAL: ~42
-const MAX_QUERIES = 3;
+// Tuning knobs. CF Workflows subrequest limit: 50 free / 10000 paid per instance.
+// On paid, we can be generous - the old values were tuned for free-tier hard cap.
+const MAX_QUERIES = 8;
 const JOBS_PER_QUERY = 30;
-const LLM_RANKED_COUNT = 40;
-const SEMANTIC_ONLY_COUNT = 60;
-const RERANK_BATCH_SIZE = 20;
+const LLM_RANKED_COUNT = 60;
+const SEMANTIC_ONLY_COUNT = 100;
+const RERANK_BATCH_SIZE = 15;
 
 const STEPS = {
   diagnose: 'Diagnose resume',
@@ -181,7 +178,9 @@ export class ResumePipeline extends WorkflowEntrypoint<Env, ResumePipelineParams
       const flat = perQueryResults.flat();
       const deduped = dedupeJobs(flat).slice(0, JOBS_PER_QUERY * queries.length);
       const bySource: Record<string, number> = {
-        arbeitnow: 0, hackernews: 0, adzuna: 0, jooble: 0, findwork: 0,
+        remotive: 0, arbeitnow: 0, remoteok: 0, themuse: 0, usajobs: 0,
+        workingnomads: 0, jobicy: 0, hackernews: 0, adzuna: 0, jsearch: 0,
+        jooble: 0, findwork: 0,
       };
       for (const j of flat) bySource[j.source] = (bySource[j.source] || 0) + 1;
       const breakdown = Object.entries(bySource)

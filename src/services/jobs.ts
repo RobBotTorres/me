@@ -486,14 +486,17 @@ export async function searchJobs(options: SearchOptions): Promise<ExternalJob[]>
   // Where supported, pass USA as location hint for richer results
   const locForAPI = usaOnly && !location ? 'United States' : location;
 
-  // Only sources that consistently return US-eligible results for our queries.
-  // Removed (returned 0 for this resume): remotive, remoteok, themuse, usajobs,
-  // workingnomads, jobicy, jsearch. Each removal saves 1 external subrequest
-  // per query, critical for the per-workflow-instance 50 limit on free plan.
   const sources = await Promise.all([
+    searchRemotive(query),
     searchArbeitnow(query),
+    searchRemoteOK(query),
+    searchTheMuse(query),
+    searchUSAJobs(query, locForAPI),
+    searchWorkingNomads(query),
+    searchJobicy(query),
     searchHackerNews(query),
     searchAdzuna(query, locForAPI, adzunaAppId, adzunaAppKey),
+    searchJSearch(query, locForAPI, rapidApiKey),
     searchJooble(query, locForAPI, joobleApiKey),
     searchFindwork(query, findworkApiKey),
   ]);
