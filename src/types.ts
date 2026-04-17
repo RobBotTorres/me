@@ -8,6 +8,7 @@ export interface Env {
   ADZUNA_APP_KEY?: string;
   JOOBLE_API_KEY?: string;
   FINDWORK_API_KEY?: string;
+  SELF_URL?: string;
 }
 
 export interface PipelineEvent {

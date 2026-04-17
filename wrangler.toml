@@ -26,6 +26,9 @@ binding = "ASSETS"
 not_found_handling = "single-page-application"
 
 [vars]
+# Self URL for workflow -> worker self-fetch (offloads AI calls to fresh Worker invocations)
+SELF_URL = "https://job-search-agent.robbieetorres.workers.dev"
+
 # Optional job board API keys (add via dashboard as secrets):
 #   npx wrangler secret put RAPIDAPI_KEY
 #   npx wrangler secret put ADZUNA_APP_ID

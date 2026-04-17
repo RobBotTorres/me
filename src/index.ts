@@ -27,6 +27,22 @@ app.get('/api/health', (c) => {
 });
 
 // Test endpoint: hit embedding directly so we can isolate whether Workers AI works
+// Internal endpoint called by Workflow via self-fetch. Runs in a fresh Worker
+// invocation so the Workflow doesn't burn its subrequest budget on AI calls.
+app.post('/api/internal/embed', async (c) => {
+  const body = await c.req.json<{ texts: string[] }>();
+  if (!Array.isArray(body.texts) || body.texts.length === 0) {
+    return c.json({ error: 'texts required' }, 400);
+  }
+  const truncated = body.texts.map((t) => (t || '').slice(0, 2000));
+  try {
+    const response = await c.env.AI.run('@cf/baai/bge-base-en-v1.5', { text: truncated });
+    return c.json({ embeddings: (response as { data: number[][] }).data });
+  } catch (err) {
+    return c.json({ error: err instanceof Error ? err.message : String(err) }, 500);
+  }
+});
+
 app.post('/api/test/embed', async (c) => {
   const body = await c.req.json<{ texts?: string[]; count?: number }>().catch(() => ({} as { texts?: string[]; count?: number }));
   const count = body.count ?? 40;

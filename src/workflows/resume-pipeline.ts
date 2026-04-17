@@ -230,9 +230,9 @@ export class ResumePipeline extends WorkflowEntrypoint<Env, ResumePipelineParams
     let failedBatches = 0;
     let lastError = '';
 
+    const selfUrl = this.env.SELF_URL || 'https://job-search-agent.robbieetorres.workers.dev';
+
     for (let b = 0; b < numBatches; b++) {
-      // Sleep before each batch forces workflow suspension → fresh invocation → fresh subrequest budget
-      await step.sleep(`pause-embed-${b}`, '1 second');
       const i = b * EMBED_BATCH;
       const slice = jobTexts.slice(i, i + EMBED_BATCH);
       const result = await step.do(
@@ -240,8 +240,19 @@ export class ResumePipeline extends WorkflowEntrypoint<Env, ResumePipelineParams
         { retries: { limit: 2, delay: '5 seconds' }, timeout: '2 minutes' },
         async () => {
           try {
-            const part = await getEmbeddingsBatch(this.env.AI, slice);
-            return { ok: true as const, embeddings: part };
+            // Self-fetch: runs in a fresh Worker invocation with its own subrequest budget.
+            // From the workflow's perspective, this is ONE subrequest (the fetch call).
+            const res = await fetch(`${selfUrl}/api/internal/embed`, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ texts: slice }),
+            });
+            if (!res.ok) {
+              const errText = await res.text().catch(() => 'unknown');
+              return { ok: false as const, error: `HTTP ${res.status}: ${errText.slice(0, 200)}` };
+            }
+            const data = (await res.json()) as { embeddings: number[][] };
+            return { ok: true as const, embeddings: data.embeddings };
           } catch (err) {
             return { ok: false as const, error: err instanceof Error ? err.message : String(err) };
           }
