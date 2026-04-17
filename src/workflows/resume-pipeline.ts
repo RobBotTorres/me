@@ -15,13 +15,13 @@ import { searchJobs } from '../services/jobs';
 
 export type ResumePipelineParams = { resumeId: number };
 
-// Tuning knobs (constrained by Cloudflare's subrequest limit: 50 free / 1000 paid per step)
+// Tuning knobs (constrained by Cloudflare's subrequest limit: 50 free / 1000 paid per invocation)
 const MAX_QUERIES = 4;
 const JOBS_PER_QUERY = 30;
 const LLM_RANKED_COUNT = 50;
 const SEMANTIC_ONLY_COUNT = 70;
 const RERANK_BATCH_SIZE = 15;
-const EMBED_BATCH = 40;             // bigger batch = fewer subrequests
+const EMBED_BATCH = 60;             // 120 jobs / 60 = 2 batches (Workers AI supports up to 100)
 
 const STEPS = {
   diagnose: 'Diagnose resume',
@@ -231,6 +231,8 @@ export class ResumePipeline extends WorkflowEntrypoint<Env, ResumePipelineParams
     let lastError = '';
 
     for (let b = 0; b < numBatches; b++) {
+      // Sleep before each batch forces workflow suspension → fresh invocation → fresh subrequest budget
+      await step.sleep(`pause-embed-${b}`, '1 second');
       const i = b * EMBED_BATCH;
       const slice = jobTexts.slice(i, i + EMBED_BATCH);
       const result = await step.do(
@@ -299,6 +301,7 @@ export class ResumePipeline extends WorkflowEntrypoint<Env, ResumePipelineParams
 
     const rankedJobs: RankedJob[] = [];
     for (let b = 0; b < totalBatches; b++) {
+      await step.sleep(`pause-rerank-${b}`, '1 second');
       const start = b * RERANK_BATCH_SIZE;
       const batch = topForLLM.slice(start, start + RERANK_BATCH_SIZE);
 
