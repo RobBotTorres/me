@@ -126,6 +126,19 @@ app.get('/api/diagnostics', async (c) => {
     checks.d1_workflow_id_column = { ok: false, detail: (e as Error).message };
   }
 
+  // Unique index on pipeline_events (needed for UPSERT)
+  try {
+    const idx = await c.env.DB.prepare(
+      "SELECT name FROM sqlite_master WHERE type='index' AND name='idx_pipeline_events_resume_step'"
+    ).first();
+    checks.d1_pipeline_events_unique_index = {
+      ok: !!idx,
+      detail: idx ? undefined : "Run: CREATE UNIQUE INDEX idx_pipeline_events_resume_step ON pipeline_events(resume_id, step_key);",
+    };
+  } catch (e) {
+    checks.d1_pipeline_events_unique_index = { ok: false, detail: (e as Error).message };
+  }
+
   // Workflow binding present
   checks.workflow_binding = {
     ok: typeof c.env.PIPELINE !== 'undefined',

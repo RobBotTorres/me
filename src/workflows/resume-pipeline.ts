@@ -15,17 +15,16 @@ import { searchJobs } from '../services/jobs';
 
 export type ResumePipelineParams = { resumeId: number };
 
-// Tuning knobs. CF Workflows subrequest limit: 50 free / 10000 paid (default) PER INSTANCE (cumulative).
-// step.sleep does NOT reset the budget. So we budget carefully:
-//   init: ~3  | diagnose: ~6 (2 AI + 4 D1)  | search: ~25 (5 src × 4 query + events)
-//   post: ~2  | embed: ~4 (2 AI + 2 events) | rerank: ~8 (4 AI + 4 events)
-//   save: ~5  | misc: ~5  | TOTAL: ~58
-// Over 50 but well under 10000 (paid). Paid users: runs fine. Free users: upgrade or cut queries.
-const MAX_QUERIES = 4;
+// Tuning knobs. CF Workflows subrequest limit: 50 free / 10000 paid PER INSTANCE (cumulative).
+// step.sleep does NOT reset the budget. Budget targets below aim to fit under 50 for free users.
+//   init: ~3  | diagnose: ~4 (2 AI + 2 D1)  | search: ~17 (5 src × 3 query + events)
+//   post: ~2  | embed: ~3 (1 AI + 2 events) | rerank: ~8 (4 AI + 4 events)
+//   save: ~5  | TOTAL: ~42
+const MAX_QUERIES = 3;
 const JOBS_PER_QUERY = 30;
-const LLM_RANKED_COUNT = 50;
-const SEMANTIC_ONLY_COUNT = 70;
-const RERANK_BATCH_SIZE = 15;
+const LLM_RANKED_COUNT = 40;
+const SEMANTIC_ONLY_COUNT = 60;
+const RERANK_BATCH_SIZE = 20;
 
 const STEPS = {
   diagnose: 'Diagnose resume',
