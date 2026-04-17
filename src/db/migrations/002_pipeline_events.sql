@@ -15,5 +15,9 @@ CREATE TABLE IF NOT EXISTS pipeline_events (
 
 CREATE INDEX IF NOT EXISTS idx_pipeline_events_resume ON pipeline_events(resume_id, id);
 
+-- Unique constraint so we can UPSERT (single subrequest instead of SELECT+INSERT/UPDATE)
+CREATE UNIQUE INDEX IF NOT EXISTS idx_pipeline_events_resume_step
+  ON pipeline_events(resume_id, step_key);
+
 -- Also track the active workflow instance id per resume
 ALTER TABLE resumes ADD COLUMN workflow_id TEXT;

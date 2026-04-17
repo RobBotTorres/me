@@ -29,6 +29,7 @@ CREATE TABLE IF NOT EXISTS pipeline_events (
   updated_at TEXT DEFAULT (datetime('now'))
 );
 CREATE INDEX IF NOT EXISTS idx_pipeline_events_resume ON pipeline_events(resume_id, id);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_pipeline_events_resume_step ON pipeline_events(resume_id, step_key);
 
 CREATE TABLE IF NOT EXISTS jobs (
   id INTEGER PRIMARY KEY AUTOINCREMENT,

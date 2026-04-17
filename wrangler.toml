@@ -3,6 +3,10 @@ main = "src/index.ts"
 compatibility_date = "2024-11-01"
 compatibility_flags = ["nodejs_compat"]
 
+# CPU time cap: 50s per invocation (paid plan supports this)
+[limits]
+cpu_ms = 50000
+
 # Workers AI binding
 [ai]
 binding = "AI"
