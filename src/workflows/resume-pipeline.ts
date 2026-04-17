@@ -36,7 +36,7 @@ const STEPS = {
 
 type StepKey = keyof typeof STEPS;
 
-// Single-statement UPSERT: 1 D1 subrequest per event (was 2: SELECT + INSERT/UPDATE)
+// emitEvent: no unique-index requirement. Costs 2 subrequests (SELECT + INSERT/UPDATE).
 async function emitEvent(
   db: D1Database,
   resumeId: number,
@@ -45,21 +45,35 @@ async function emitEvent(
   opts: { current?: number; total?: number; message?: string } = {}
 ) {
   const label = STEPS[stepKey];
-  await db.prepare(
-    `INSERT INTO pipeline_events (resume_id, step_key, step_label, status, current_count, total_count, message)
-     VALUES (?, ?, ?, ?, ?, ?, ?)
-     ON CONFLICT(resume_id, step_key) DO UPDATE SET
-       status = excluded.status,
-       current_count = COALESCE(excluded.current_count, pipeline_events.current_count),
-       total_count = COALESCE(excluded.total_count, pipeline_events.total_count),
-       message = COALESCE(excluded.message, pipeline_events.message),
-       updated_at = datetime('now')`
-  ).bind(
-    resumeId, stepKey, label, status,
-    opts.current ?? 0,
-    opts.total ?? null,
-    opts.message ?? null
-  ).run();
+  const existing = await db
+    .prepare('SELECT id FROM pipeline_events WHERE resume_id = ? AND step_key = ?')
+    .bind(resumeId, stepKey).first<{ id: number }>();
+
+  if (existing) {
+    await db.prepare(
+      `UPDATE pipeline_events SET status = ?,
+         current_count = COALESCE(?, current_count),
+         total_count = COALESCE(?, total_count),
+         message = COALESCE(?, message),
+         updated_at = datetime('now') WHERE id = ?`
+    ).bind(
+      status,
+      opts.current ?? null,
+      opts.total ?? null,
+      opts.message ?? null,
+      existing.id
+    ).run();
+  } else {
+    await db.prepare(
+      `INSERT INTO pipeline_events (resume_id, step_key, step_label, status, current_count, total_count, message)
+       VALUES (?, ?, ?, ?, ?, ?, ?)`
+    ).bind(
+      resumeId, stepKey, label, status,
+      opts.current ?? 0,
+      opts.total ?? null,
+      opts.message ?? null
+    ).run();
+  }
 }
 
 export class ResumePipeline extends WorkflowEntrypoint<Env, ResumePipelineParams> {
