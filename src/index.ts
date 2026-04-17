@@ -29,6 +29,32 @@ app.get('/api/health', (c) => {
 // Test endpoint: hit embedding directly so we can isolate whether Workers AI works
 // Internal endpoint called by Workflow via self-fetch. Runs in a fresh Worker
 // invocation so the Workflow doesn't burn its subrequest budget on AI calls.
+// Internal endpoint: rerank all jobs via Workers AI (batches internally)
+app.post('/api/internal/rerank', async (c) => {
+  const { rerankJobs } = await import('./services/ai');
+  const body = await c.req.json<{
+    diagnosis: import('./types').ResumeDiagnosis;
+    resumeText: string;
+    jobs: { title: string; company: string; description: string }[];
+    batchSize?: number;
+  }>();
+  const batchSize = body.batchSize || 15;
+  const results: import('./services/ai').JobRerankResultExt[] = [];
+  for (let i = 0; i < body.jobs.length; i += batchSize) {
+    const batch = body.jobs.slice(i, i + batchSize);
+    try {
+      const rankResults = await rerankJobs(c.env.AI, body.diagnosis, body.resumeText, batch);
+      // Remap indices to global positions
+      for (const r of rankResults) {
+        results.push({ ...r, job_index: i + r.job_index });
+      }
+    } catch (err) {
+      // Skip failed batch
+    }
+  }
+  return c.json({ results });
+});
+
 app.post('/api/internal/embed', async (c) => {
   const body = await c.req.json<{ texts: string[] }>();
   if (!Array.isArray(body.texts) || body.texts.length === 0) {
@@ -36,8 +62,16 @@ app.post('/api/internal/embed', async (c) => {
   }
   const truncated = body.texts.map((t) => (t || '').slice(0, 2000));
   try {
-    const response = await c.env.AI.run('@cf/baai/bge-base-en-v1.5', { text: truncated });
-    return c.json({ embeddings: (response as { data: number[][] }).data });
+    // Workers AI bge-base supports ~100 texts per request. Batch internally.
+    const BATCH = 90;
+    const allEmbeddings: number[][] = [];
+    for (let i = 0; i < truncated.length; i += BATCH) {
+      const slice = truncated.slice(i, i + BATCH);
+      const response = await c.env.AI.run('@cf/baai/bge-base-en-v1.5', { text: slice });
+      const part = (response as { data: number[][] }).data;
+      allEmbeddings.push(...part);
+    }
+    return c.json({ embeddings: allEmbeddings, count: allEmbeddings.length });
   } catch (err) {
     return c.json({ error: err instanceof Error ? err.message : String(err) }, 500);
   }

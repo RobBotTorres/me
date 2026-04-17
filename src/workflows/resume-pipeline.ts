@@ -212,87 +212,61 @@ export class ResumePipeline extends WorkflowEntrypoint<Env, ResumePipelineParams
 
     await step.sleep('pause-before-embed', '1 second');
 
-    // --- Step 3: Embed jobs (each batch = its own step → fresh subrequest budget per batch) ---
+    // --- Step 3: Embed jobs via ONE self-fetch (internal endpoint batches within a regular Worker) ---
     const jobTexts = allJobs.map((j) =>
       `${j.title} at ${j.company}\n${(j.description || '').slice(0, 1500)}`
     );
-    const numBatches = Math.ceil(jobTexts.length / EMBED_BATCH);
-
-    // Kick off with running status (its own tiny step)
-    await step.do('embed-start', async () => {
-      await emitEvent(db, resumeId, 'embed_jobs', 'running', {
-        current: 0, total: jobTexts.length,
-        message: `${numBatches} batches of ${EMBED_BATCH}`,
-      });
-    });
-
-    const embeddingsMap = new Map<number, number[]>();
-    let failedBatches = 0;
-    let lastError = '';
 
     const selfUrl = this.env.SELF_URL || 'https://job-search-agent.robbieetorres.workers.dev';
 
-    for (let b = 0; b < numBatches; b++) {
-      const i = b * EMBED_BATCH;
-      const slice = jobTexts.slice(i, i + EMBED_BATCH);
-      const result = await step.do(
-        `embed-batch-${b}`,
-        { retries: { limit: 2, delay: '5 seconds' }, timeout: '2 minutes' },
-        async () => {
-          try {
-            // Self-fetch: runs in a fresh Worker invocation with its own subrequest budget.
-            // From the workflow's perspective, this is ONE subrequest (the fetch call).
-            const res = await fetch(`${selfUrl}/api/internal/embed`, {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({ texts: slice }),
-            });
-            if (!res.ok) {
-              const errText = await res.text().catch(() => 'unknown');
-              return { ok: false as const, error: `HTTP ${res.status}: ${errText.slice(0, 200)}` };
-            }
-            const data = (await res.json()) as { embeddings: number[][] };
-            return { ok: true as const, embeddings: data.embeddings };
-          } catch (err) {
-            return { ok: false as const, error: err instanceof Error ? err.message : String(err) };
-          }
-        }
-      );
-      if (result.ok) {
-        for (let k = 0; k < result.embeddings.length; k++) {
-          embeddingsMap.set(i + k, result.embeddings[k]);
-        }
-      } else {
-        failedBatches++;
-        lastError = result.error;
-      }
-    }
-
-    // Aggregate + save step
-    const scored = await step.do('embed-finalize', async () => {
-      const out = allJobs
-        .map((job, i) => {
-          const emb = embeddingsMap.get(i);
-          if (!emb) return null;
-          return { job, embedding: emb, semantic: cosineSimilarity(resumeEmbedding, emb) };
-        })
-        .filter((x): x is { job: ExternalJob; embedding: number[]; semantic: number } => x !== null);
-
-      if (out.length === 0) {
-        await emitEvent(db, resumeId, 'embed_jobs', 'failed', {
-          message: `All ${numBatches} batches failed. Last error: ${lastError || 'unknown'}`,
+    const scored = await step.do(
+      'embed-all',
+      { retries: { limit: 2, delay: '10 seconds' }, timeout: '3 minutes' },
+      async () => {
+        await emitEvent(db, resumeId, 'embed_jobs', 'running', {
+          current: 0, total: jobTexts.length,
+          message: `Embedding ${jobTexts.length} jobs via internal endpoint`,
         });
-        throw new Error(`All ${numBatches} embedding batches failed. Last error: ${lastError || 'unknown'}`);
-      }
 
-      out.sort((a, b) => b.semantic - a.semantic);
-      const totalKept = LLM_RANKED_COUNT + SEMANTIC_ONLY_COUNT;
-      await emitEvent(db, resumeId, 'embed_jobs', 'completed', {
-        current: out.length, total: allJobs.length,
-        message: `Embedded ${out.length}/${allJobs.length}${failedBatches ? `, ${failedBatches} batches failed` : ''}; top ${Math.min(totalKept, out.length)} kept`,
-      });
-      return out.slice(0, totalKept);
-    });
+        const res = await fetch(`${selfUrl}/api/internal/embed`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ texts: jobTexts }),
+        });
+
+        if (!res.ok) {
+          const errText = await res.text().catch(() => 'unknown');
+          await emitEvent(db, resumeId, 'embed_jobs', 'failed', {
+            message: `HTTP ${res.status}: ${errText.slice(0, 300)}`,
+          });
+          throw new Error(`Embed endpoint failed: HTTP ${res.status}: ${errText.slice(0, 300)}`);
+        }
+
+        const data = (await res.json()) as { embeddings?: number[][]; error?: string };
+        if (data.error || !data.embeddings) {
+          await emitEvent(db, resumeId, 'embed_jobs', 'failed', {
+            message: data.error || 'No embeddings returned',
+          });
+          throw new Error(data.error || 'No embeddings returned');
+        }
+
+        const out = allJobs
+          .map((job, i) => {
+            const emb = data.embeddings![i];
+            if (!emb) return null;
+            return { job, embedding: emb, semantic: cosineSimilarity(resumeEmbedding, emb) };
+          })
+          .filter((x): x is { job: ExternalJob; embedding: number[]; semantic: number } => x !== null);
+
+        out.sort((a, b) => b.semantic - a.semantic);
+        const totalKept = LLM_RANKED_COUNT + SEMANTIC_ONLY_COUNT;
+        await emitEvent(db, resumeId, 'embed_jobs', 'completed', {
+          current: out.length, total: allJobs.length,
+          message: `Embedded ${out.length}/${allJobs.length}; top ${Math.min(totalKept, out.length)} kept for ranking`,
+        });
+        return out.slice(0, totalKept);
+      }
+    );
 
     // --- Step 4: Hybrid ranking ---
     // Top LLM_RANKED_COUNT get full LLM rerank (lane + reasoning)
@@ -307,60 +281,66 @@ export class ResumePipeline extends WorkflowEntrypoint<Env, ResumePipelineParams
     const topForLLM = scored.slice(0, LLM_RANKED_COUNT);
     const semanticOnly = scored.slice(LLM_RANKED_COUNT);
 
-    const totalBatches = Math.ceil(topForLLM.length / RERANK_BATCH_SIZE);
-    await emitEvent(db, resumeId, 'rerank', 'running', { current: 0, total: topForLLM.length });
+    const rankedJobs: RankedJob[] = await step.do(
+      'rerank-all',
+      { retries: { limit: 2, delay: '10 seconds' }, timeout: '5 minutes' },
+      async (): Promise<RankedJob[]> => {
+        await emitEvent(db, resumeId, 'rerank', 'running', { current: 0, total: topForLLM.length });
 
-    const rankedJobs: RankedJob[] = [];
-    for (let b = 0; b < totalBatches; b++) {
-      await step.sleep(`pause-rerank-${b}`, '1 second');
-      const start = b * RERANK_BATCH_SIZE;
-      const batch = topForLLM.slice(start, start + RERANK_BATCH_SIZE);
+        const res = await fetch(`${selfUrl}/api/internal/rerank`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            diagnosis,
+            resumeText: resume.raw_text,
+            jobs: topForLLM.map((x) => ({
+              title: x.job.title,
+              company: x.job.company,
+              description: x.job.description,
+            })),
+            batchSize: RERANK_BATCH_SIZE,
+          }),
+        });
 
-      const batchRanked = await step.do(
-        `rerank-batch-${b}`,
-        { retries: { limit: 2, delay: '5 seconds' }, timeout: '3 minutes' },
-        async (): Promise<RankedJob[]> => {
-          try {
-            const results = await rerankJobs(
-              this.env.AI, diagnosis, resume.raw_text,
-              batch.map((x) => ({
-                title: x.job.title, company: x.job.company, description: x.job.description,
-              }))
-            );
-            return results
-              .map((r): RankedJob | null => {
-                const src = batch[r.job_index];
-                if (!src) return null;
-                return {
-                  ...src,
-                  score: r.score,
-                  lane: r.lane,
-                  reasoning: r.reasoning,
-                  skills: r.skills || [],
-                };
-              })
-              .filter((x): x is RankedJob => x !== null);
-          } catch {
-            return batch.map((x) => ({
+        if (!res.ok) {
+          // Fall back to semantic scores for everything
+          return topForLLM.map((x) => ({
+            ...x,
+            score: Math.round(x.semantic * 100),
+            lane: 'domain_relevant' as JobLane,
+            reasoning: 'Fallback score (rerank endpoint error).',
+            skills: [],
+          }));
+        }
+
+        const data = (await res.json()) as {
+          results: Array<{ job_index: number; score: number; lane: JobLane; reasoning: string; skills?: string[] }>;
+        };
+
+        // Map results back to jobs; fall back to semantic for any missing
+        const byIndex = new Map(data.results.map((r) => [r.job_index, r]));
+        const out = topForLLM.map((x, i) => {
+          const r = byIndex.get(i);
+          if (!r) {
+            return {
               ...x,
               score: Math.round(x.semantic * 100),
               lane: 'domain_relevant' as JobLane,
-              reasoning: 'Fallback score from semantic similarity.',
+              reasoning: 'Fallback from semantic (not in rerank results).',
               skills: [],
-            }));
+            };
           }
-        }
-      );
-
-      rankedJobs.push(...batchRanked);
-      // Only emit event every other batch to save subrequests
-      if (b % 2 === 1 || b === totalBatches - 1) {
-        await emitEvent(db, resumeId, 'rerank', 'running', {
-          current: Math.min((b + 1) * RERANK_BATCH_SIZE, topForLLM.length),
-          total: topForLLM.length,
+          return {
+            ...x,
+            score: r.score,
+            lane: r.lane,
+            reasoning: r.reasoning,
+            skills: r.skills || [],
+          };
         });
+        return out;
       }
-    }
+    );
 
     // Append semantic-only tier (no LLM cost)
     for (const s of semanticOnly) {
