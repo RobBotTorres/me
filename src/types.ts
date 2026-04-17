@@ -74,7 +74,7 @@ export interface Job {
   created_at: string;
 }
 
-export type JobLane = 'fast_income' | 'domain_relevant' | 'aspirational';
+export type JobLane = 'fast_income' | 'lateral' | 'stretch';
 
 export interface Application {
   id: number;
@@ -131,38 +131,48 @@ export interface ExternalJob {
 
 // --- AI output shapes ---
 
-export interface CareerIdentity {
-  label: string;
-  strength: 'strong_on_paper' | 'strong_in_scope' | 'mixed';
-  evidence: string[];
-  liability_notes?: string;
-}
-
 export interface ResumeDiagnosis {
-  identities: CareerIdentity[];
-  target_titles: string[];
-  keywords: string[];
-  lanes: {
-    fast_income: LaneRecommendation;
-    domain_relevant: LaneRecommendation;
-    aspirational: LaneRecommendation;
+  actual_work: {
+    plain_language: string;
+    problem_solved: string;
+    contradictions: string[];
   };
-  gaps: {
-    fixable_30d: string[];
-    fixable_60_90d: string[];
-    structural: string[];
+  positioning: {
+    closest_to_truth: string;
+    strategic_repositioning: string;
+    outdated: string;
+    coherent_statement: string;
+  };
+  titles: Array<{
+    title: string;
+    company_type: string;
+    difficulty: 'safe' | 'moderate' | 'stretch';
+    lead_with_ecommerce: boolean;
+  }>;
+  lanes: {
+    fast_income: LaneDetail;
+    lateral: LaneDetail;
+    stretch: LaneDetail;
+  };
+  kidding_yourself: {
+    likely_wrong_about: string[];
+    value_miscalibration: string;
+    chasing_wrong_fits: string[];
+    ignoring_good_fits: string[];
   };
   ranked_angles: SearchAngle[];
-  honest_notes: string;
+  research_list: string[];
+  target_titles: string[];
   skills: string[];
   experience_years: number;
   summary: string;
 }
 
-export interface LaneRecommendation {
+export interface LaneDetail {
   description: string;
-  target_companies_or_types: string[];
-  realistic_timeline?: string;
+  examples: string[];
+  probability: 'high' | 'medium' | 'low';
+  timeline: string;
 }
 
 export interface SearchAngle {

@@ -25,42 +25,90 @@ async function runJson<T>(ai: Ai, system: string, user: string, maxTokens = 3500
   return JSON.parse(jsonMatch[0]) as T;
 }
 
-// --- STEP 1-5 Resume Diagnosis ---
+// --- STEP 1-6 Resume Diagnosis ---
 
-const DIAGNOSE_SYSTEM = `You are a brutally honest career strategist. Your tone is direct, evidence-based. Never use corporate enthusiasm language ("passionate", "thrilled", "excited").
+const DIAGNOSE_SYSTEM = `You are helping someone run a comprehensive job search. They have multiple documents that may contradict each other. Push back where they're vague. Never use corporate language ("passionate", "thrilled", "excited"). Only make claims tied to evidence in their materials.
 
-Output COMPACT JSON. Be concise. No padding text outside the JSON.
+They're flip-flopping between career identities. Your job: collapse that ambiguity into a single coherent positioning.
+
+Output STRICT JSON. Be direct. Fit within token budget.
 
 Schema:
 {
-  "identities": [{"label":"...", "strength":"strong_on_paper|strong_in_scope|mixed", "evidence":["..."], "liability_notes":"..."}],
-  "target_titles": ["..."],
-  "lanes": {
-    "fast_income": {"description":"...", "target_companies_or_types":["..."], "realistic_timeline":"..."},
-    "domain_relevant": {"description":"...", "target_companies_or_types":["..."]},
-    "aspirational": {"description":"...", "target_companies_or_types":["..."]}
+  "actual_work": {
+    "plain_language": "What they actually DO, in plain English. 2-3 sentences. Ignore titles.",
+    "problem_solved": "What specific problem they solve for a company. Concrete.",
+    "contradictions": ["Specific contradiction 1 between their documents", "..."]
   },
-  "gaps": {"fixable_30d":["..."], "fixable_60_90d":["..."], "structural":["..."]},
-  "ranked_angles": [{"title":"...", "company_type":"...", "lane":"...", "why_it_fits":"...", "top_5":true}],
-  "honest_notes": "one paragraph",
-  "skills": ["..."],
+  "positioning": {
+    "closest_to_truth": "Of the identities they've been signaling, which one actually matches the work. Cite evidence.",
+    "strategic_repositioning": "Which identity is them reaching/repositioning (vs. what they've actually done).",
+    "outdated": "Which identity no longer fits and should be retired.",
+    "coherent_statement": "2-3 sentence positioning statement they can use everywhere. Broad enough to cover tech-forward AND e-commerce roles without being two different people."
+  },
+  "titles": [
+    {
+      "title": "exact job-board-searchable title",
+      "company_type": "Specific: stage + size + industry adjacency (e.g. 'Series B-D DTC brands, 50-500 ppl, CPG-adjacent')",
+      "difficulty": "safe | moderate | stretch",
+      "lead_with_ecommerce": true
+    }
+  ],
+  "lanes": {
+    "fast_income": {
+      "description": "Contract/staffing where industry background is a direct asset.",
+      "examples": ["e.g. wine industry consultancy, DTC agencies"],
+      "probability": "high | medium | low",
+      "timeline": "e.g. '2-4 weeks to first contract'"
+    },
+    "lateral": {
+      "description": "Tech-adjacent where industry experience is a feature (CPG tech, DTC platforms, commerce SaaS, wine-tech, vertical SaaS).",
+      "examples": ["..."],
+      "probability": "high | medium | low",
+      "timeline": "e.g. '2-3 months with effort'"
+    },
+    "stretch": {
+      "description": "Pure tech where they need warm referrals + sharper story.",
+      "examples": ["..."],
+      "probability": "high | medium | low",
+      "timeline": "e.g. '6-12 months, referral-gated'"
+    }
+  },
+  "kidding_yourself": {
+    "likely_wrong_about": ["specific assumption they're probably wrong about"],
+    "value_miscalibration": "where they're over- or under-valuing themselves. Be specific.",
+    "chasing_wrong_fits": ["role types they're chasing that don't fit"],
+    "ignoring_good_fits": ["role types they should target but are ignoring"]
+  },
+  "ranked_angles": [
+    {
+      "title": "specific title",
+      "company_type": "specific company profile",
+      "lane": "fast_income | lateral | stretch",
+      "why_it_fits": "evidence-tied reason",
+      "top_5": true
+    }
+  ],
+  "research_list": ["companies or sectors to research further"],
+  "target_titles": ["8-12 real searchable titles - SAME as titles[].title, for job board queries"],
+  "skills": ["concrete skills from materials"],
   "experience_years": 0,
-  "summary": "2 sentences"
+  "summary": "positioning.coherent_statement (repeated here for compat)"
 }
 
-Constraints:
-- 3-5 identities only
-- 8-12 target_titles (real searchable titles)
-- 10-12 ranked_angles total, with top 5 marked top_5:true
-- Each evidence/note/why_it_fits: ONE sentence max
-- Only claims tied to resume evidence`;
+Rules:
+- 8-12 titles (mix of safe/moderate/stretch)
+- 10-15 ranked_angles with top 5 flagged top_5:true
+- Every claim must trace to something in the materials
+- Where materials disagree, name it - don't average them
+- No corporate enthusiasm language`;
 
 export async function diagnoseResume(ai: Ai, resumeText: string): Promise<ResumeDiagnosis> {
   return runJson<ResumeDiagnosis>(
     ai,
     DIAGNOSE_SYSTEM,
-    `RESUME:\n\n${resumeText.slice(0, 8000)}`,
-    2200
+    `MATERIALS (may include resume, portfolio, LinkedIn - call out contradictions):\n\n${resumeText.slice(0, 10000)}`,
+    3500
   );
 }
 
@@ -70,8 +118,8 @@ const RERANK_SYSTEM = `You are a job-match strategist. You see a candidate's ful
 
 Lanes:
 - fast_income: contract/agency/quick-onboarding role the candidate can realistically land in weeks
-- domain_relevant: candidate's background is an asset, not a handicap
-- aspirational: stretch role, likely needs warm referral to land
+- lateral: tech-adjacent role where industry experience is a feature (CPG tech, DTC platforms, commerce SaaS, vertical SaaS)
+- stretch: pure tech / stretch role, likely needs warm referral to land
 
 Output STRICT JSON:
 {
@@ -103,7 +151,8 @@ export async function rerankJobs(
   if (jobs.length === 0) return [];
 
   const diagSummary = {
-    identities: diagnosis.identities.map((i) => i.label),
+    positioning: diagnosis.positioning?.coherent_statement || diagnosis.summary,
+    closest_to_truth: diagnosis.positioning?.closest_to_truth,
     target_titles: diagnosis.target_titles,
     skills: diagnosis.skills,
   };
@@ -244,7 +293,10 @@ export async function extractJobSkills(ai: Ai, jobDescription: string): Promise<
 }
 
 export function laneFromString(s: string | null | undefined): JobLane | null {
-  if (s === 'fast_income' || s === 'domain_relevant' || s === 'aspirational') return s;
+  if (s === 'fast_income' || s === 'lateral' || s === 'stretch') return s;
+  // Back-compat with old lane names
+  if (s === 'domain_relevant') return 'lateral';
+  if (s === 'aspirational') return 'stretch';
   return null;
 }
 

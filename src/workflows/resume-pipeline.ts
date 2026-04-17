@@ -117,15 +117,15 @@ export class ResumePipeline extends WorkflowEntrypoint<Env, ResumePipelineParams
           `).bind(
             JSON.stringify(diagnosis.skills),
             diagnosis.experience_years,
-            diagnosis.summary,
+            diagnosis.summary || diagnosis.positioning?.coherent_statement || '',
             JSON.stringify(diagnosis),
-            JSON.stringify(diagnosis.identities),
+            JSON.stringify(diagnosis.titles || []),
             JSON.stringify(diagnosis.target_titles),
             JSON.stringify(embedding),
             resumeId
           ).run();
           await emitEvent(db, resumeId, 'diagnose', 'completed', {
-            message: `${diagnosis.identities?.length || 0} identities, ${diagnosis.target_titles?.length || 0} target titles`,
+            message: `${diagnosis.titles?.length || 0} titles, ${diagnosis.target_titles?.length || 0} target queries`,
           });
           return { diagnosis, embedding };
         } catch (err) {
@@ -288,7 +288,7 @@ export class ResumePipeline extends WorkflowEntrypoint<Env, ResumePipelineParams
               out.push({
                 ...x,
                 score: Math.round(x.semantic * 100),
-                lane: 'domain_relevant',
+                lane: 'lateral',
                 reasoning: 'Fallback score (batch rerank failed).',
                 skills: [],
               });
