@@ -505,9 +505,12 @@ export async function searchJobs(options: SearchOptions): Promise<ExternalJob[]>
   if (remoteOnly) allJobs = allJobs.filter((j) => j.remote);
   if (usaOnly) allJobs = allJobs.filter(isUSACompatible);
 
+  // Drop jobs missing essential fields to avoid null crashes
+  allJobs = allJobs.filter((j) => j && j.title && j.company);
+
   const seen = new Set<string>();
   allJobs = allJobs.filter((j) => {
-    const key = `${j.title.toLowerCase()}|${j.company.toLowerCase()}`;
+    const key = `${(j.title || '').toLowerCase()}|${(j.company || '').toLowerCase()}`;
     if (seen.has(key)) return false;
     seen.add(key);
     return true;

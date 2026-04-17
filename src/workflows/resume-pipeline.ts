@@ -406,6 +406,7 @@ function dedupeJobs(jobs: ExternalJob[]): ExternalJob[] {
   const seen = new Set<string>();
   const out: ExternalJob[] = [];
   for (const j of jobs) {
+    if (!j || !j.title || !j.company) continue; // skip malformed
     const key = j.external_id || `${j.title}::${j.company}`;
     if (seen.has(key)) continue;
     seen.add(key);
