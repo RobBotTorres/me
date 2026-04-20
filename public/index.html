@@ -100,7 +100,8 @@
             <option value="60">60+</option>
             <option value="40">40+</option>
           </select>
-          <span class="ml-auto text-xs text-gray-500" id="jobs-count"></span>
+          <button onclick="openAddJob()" class="ml-auto bg-green-600 text-white px-3 py-1.5 rounded text-xs font-medium hover:bg-green-700">+ Add Job Manually</button>
+          <span class="text-xs text-gray-500" id="jobs-count"></span>
         </div>
       </div>
       <div id="jobs-list" class="space-y-3"><p class="text-gray-400 text-sm">No jobs yet. Upload a resume first.</p></div>
@@ -130,6 +131,68 @@
         </div>
       </div>
       <div id="resumes-list" class="space-y-4"><h2 class="text-lg font-semibold mb-2">Your Resumes</h2></div>
+    </div>
+
+    <!-- ADD JOB MODAL -->
+    <div id="add-job-overlay" class="fixed inset-0 bg-black bg-opacity-50 hidden z-50 items-center justify-center p-4" onclick="closeAddJob(event)">
+      <div class="bg-white rounded-xl max-w-2xl w-full max-h-screen overflow-y-auto p-6" onclick="event.stopPropagation()">
+        <div class="flex items-start justify-between mb-4">
+          <div>
+            <h2 class="text-xl font-bold">Add Job Manually</h2>
+            <p class="text-sm text-gray-500">Paste a listing and we'll score it against your resume.</p>
+          </div>
+          <button onclick="closeAddJobForce()" class="text-gray-400 hover:text-gray-600 text-2xl">&times;</button>
+        </div>
+        <div class="space-y-3">
+          <div>
+            <label class="block text-xs font-medium text-gray-700 mb-1">Title *</label>
+            <input type="text" id="add-title" placeholder="e.g. Senior Technical Program Manager" class="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm">
+          </div>
+          <div class="grid grid-cols-2 gap-3">
+            <div>
+              <label class="block text-xs font-medium text-gray-700 mb-1">Company</label>
+              <input type="text" id="add-company" placeholder="Acme Co." class="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm">
+            </div>
+            <div>
+              <label class="block text-xs font-medium text-gray-700 mb-1">Location</label>
+              <input type="text" id="add-location" placeholder="Remote, NYC, etc." class="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm">
+            </div>
+          </div>
+          <div>
+            <label class="block text-xs font-medium text-gray-700 mb-1">URL *</label>
+            <input type="url" id="add-url" placeholder="https://..." class="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm">
+          </div>
+          <div class="grid grid-cols-3 gap-3">
+            <div>
+              <label class="block text-xs font-medium text-gray-700 mb-1">Min Salary</label>
+              <input type="number" id="add-salary-min" placeholder="80000" class="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm">
+            </div>
+            <div>
+              <label class="block text-xs font-medium text-gray-700 mb-1">Max Salary</label>
+              <input type="number" id="add-salary-max" placeholder="120000" class="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm">
+            </div>
+            <div class="flex items-end">
+              <label class="flex items-center gap-2 text-sm pb-2">
+                <input type="checkbox" id="add-remote" class="rounded"> Remote
+              </label>
+            </div>
+          </div>
+          <div>
+            <label class="block text-xs font-medium text-gray-700 mb-1">Job Description *</label>
+            <textarea id="add-description" rows="8" placeholder="Paste the full job description..." class="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm font-mono"></textarea>
+          </div>
+          <div>
+            <label class="block text-xs font-medium text-gray-700 mb-1">Assess against resume</label>
+            <select id="add-resume" class="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm">
+              <option value="">No assessment (save only)</option>
+            </select>
+          </div>
+          <div class="flex justify-end gap-2 pt-2 border-t">
+            <button onclick="closeAddJobForce()" class="px-4 py-2 text-sm text-gray-600 hover:text-gray-900">Cancel</button>
+            <button onclick="submitAddJob()" id="btn-add-job" class="bg-green-600 text-white px-6 py-2 rounded-lg text-sm font-medium hover:bg-green-700 disabled:opacity-50">Assess &amp; Save</button>
+          </div>
+        </div>
+      </div>
     </div>
 
     <div id="modal-overlay" class="fixed inset-0 bg-black bg-opacity-50 hidden z-50 items-center justify-center p-4" onclick="closeModal(event)">
@@ -298,6 +361,62 @@ async function viewJob(id) {
         : `<button onclick="saveJob(${j.id}, ${j.resume_id || 'null'})" class="bg-gray-200 text-gray-800 px-4 py-2 rounded-lg text-sm hover:bg-gray-300">Save to Tracker</button>`}
     </div>`;
   openModal();
+}
+
+async function openAddJob() {
+  // Populate resume dropdown with completed resumes
+  const data = await api('/resumes');
+  const sel = document.getElementById('add-resume');
+  sel.innerHTML = '<option value="">No assessment (save only)</option>';
+  (data.resumes || []).filter(r => r.processing_status === 'complete').forEach(r => {
+    sel.innerHTML += `<option value="${r.id}">${esc(r.name)}</option>`;
+  });
+  // Default: first complete resume
+  const firstComplete = (data.resumes || []).find(r => r.processing_status === 'complete');
+  if (firstComplete) sel.value = firstComplete.id;
+  ['add-title','add-company','add-location','add-url','add-description','add-salary-min','add-salary-max'].forEach(id => document.getElementById(id).value = '');
+  document.getElementById('add-remote').checked = false;
+  const m = document.getElementById('add-job-overlay');
+  m.classList.remove('hidden'); m.classList.add('flex');
+}
+function closeAddJobForce() { const m = document.getElementById('add-job-overlay'); m.classList.add('hidden'); m.classList.remove('flex'); }
+function closeAddJob(e) { if (e.target.id === 'add-job-overlay') closeAddJobForce(); }
+
+async function submitAddJob() {
+  const title = document.getElementById('add-title').value.trim();
+  const description = document.getElementById('add-description').value.trim();
+  const url = document.getElementById('add-url').value.trim();
+  if (!title || !description || !url) return alert('Title, description, and URL are required.');
+
+  const body = {
+    title,
+    description,
+    url,
+    company: document.getElementById('add-company').value.trim() || undefined,
+    location: document.getElementById('add-location').value.trim() || undefined,
+    remote: document.getElementById('add-remote').checked,
+  };
+  const smin = document.getElementById('add-salary-min').value;
+  const smax = document.getElementById('add-salary-max').value;
+  if (smin) body.salary_min = parseInt(smin);
+  if (smax) body.salary_max = parseInt(smax);
+  const rid = document.getElementById('add-resume').value;
+  if (rid) body.resume_id = parseInt(rid);
+
+  const btn = document.getElementById('btn-add-job');
+  btn.disabled = true;
+  btn.textContent = body.resume_id ? 'Assessing...' : 'Saving...';
+  try {
+    const data = await api('/jobs/manual', { method: 'POST', body: JSON.stringify(body) });
+    closeAddJobForce();
+    loadJobs();
+    if (data.job?.id) viewJob(data.job.id);
+  } catch (e) {
+    alert('Error: ' + e.message);
+  } finally {
+    btn.disabled = false;
+    btn.textContent = 'Assess & Save';
+  }
 }
 
 function openModal() { const m = document.getElementById('modal-overlay'); m.classList.remove('hidden'); m.classList.add('flex'); }

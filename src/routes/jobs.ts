@@ -1,6 +1,11 @@
 import { Hono } from 'hono';
-import { Env, Resume } from '../types';
-import { generateCoverLetter } from '../services/ai';
+import { Env, Resume, ResumeDiagnosis, JobLane } from '../types';
+import {
+  generateCoverLetter,
+  getEmbedding,
+  cosineSimilarity,
+  rerankJobs,
+} from '../services/ai';
 
 const jobs = new Hono<{ Bindings: Env }>();
 
@@ -57,6 +62,96 @@ jobs.get('/:id', async (c) => {
 // Manual search endpoint (non-resume-driven) - kept for flexibility but not primary path
 jobs.post('/search', async (c) => {
   return c.json({ error: 'Job search is now triggered automatically by resume upload. Upload or re-match a resume instead.' }, 410);
+});
+
+// Manually add a single job, optionally assessed against a resume
+jobs.post('/manual', async (c) => {
+  const body = await c.req.json<{
+    title: string;
+    company?: string;
+    description: string;
+    url: string;
+    location?: string;
+    salary_min?: number;
+    salary_max?: number;
+    remote?: boolean;
+    resume_id?: number;
+  }>();
+
+  if (!body.title || !body.description || !body.url) {
+    return c.json({ error: 'title, description, and url are required' }, 400);
+  }
+
+  let matchScore: number | null = null;
+  let matchExplanation: string | null = null;
+  let lane: JobLane | null = null;
+  let semantic: number | null = null;
+  let skills: string[] = [];
+
+  if (body.resume_id) {
+    const resume = await c.env.DB.prepare('SELECT * FROM resumes WHERE id = ?')
+      .bind(body.resume_id).first<Resume>();
+
+    if (resume?.analysis && resume.embedding) {
+      try {
+        const diagnosis = JSON.parse(resume.analysis) as ResumeDiagnosis;
+        const resumeEmb = JSON.parse(resume.embedding) as number[];
+
+        // Embed job + compute semantic score
+        const jobText = `${body.title} at ${body.company || 'Unknown'}\n${body.description.slice(0, 1500)}`;
+        const jobEmb = await getEmbedding(c.env.AI, jobText);
+        semantic = cosineSimilarity(resumeEmb, jobEmb);
+
+        // Rerank (1 job)
+        const results = await rerankJobs(c.env.AI, diagnosis, resume.raw_text, [{
+          title: body.title,
+          company: body.company || 'Unknown',
+          description: body.description,
+        }]);
+        if (results.length > 0) {
+          matchScore = results[0].score;
+          matchExplanation = results[0].reasoning;
+          lane = results[0].lane;
+          skills = results[0].skills || [];
+        } else {
+          matchScore = Math.round(semantic * 100);
+          matchExplanation = 'Semantic match (rerank returned empty).';
+        }
+      } catch (err) {
+        matchScore = semantic != null ? Math.round(semantic * 100) : null;
+        matchExplanation = `Assessment error: ${err instanceof Error ? err.message : String(err)}`;
+      }
+    }
+  }
+
+  const externalId = `manual-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+  const result = await c.env.DB.prepare(`
+    INSERT INTO jobs (external_id, title, company, location, description, url,
+      salary_min, salary_max, job_type, remote, source, skills_required,
+      match_score, match_explanation, semantic_score, lane, resume_id, posted_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'full-time', ?, 'manual', ?, ?, ?, ?, ?, ?, ?)
+  `).bind(
+    externalId,
+    body.title,
+    body.company || 'Unknown',
+    body.location || null,
+    body.description,
+    body.url,
+    body.salary_min ?? null,
+    body.salary_max ?? null,
+    body.remote ? 1 : 0,
+    JSON.stringify(skills),
+    matchScore,
+    matchExplanation,
+    semantic,
+    lane,
+    body.resume_id || null,
+    new Date().toISOString()
+  ).run();
+
+  const id = result.meta.last_row_id;
+  const saved = await c.env.DB.prepare('SELECT * FROM jobs WHERE id = ?').bind(id).first();
+  return c.json({ job: saved }, 201);
 });
 
 // Generate cover letter
