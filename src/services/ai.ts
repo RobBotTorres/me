@@ -179,19 +179,64 @@ ${jobBlocks}`,
 }
 
 // --- Tailored Resume Generation ---
+// Guide mirrored from docs/resume-tailoring-guide.md — edit both when changing.
 
-const TAILORED_RESUME_SYSTEM = `You tailor resumes for specific jobs. ABSOLUTE RULE: do NOT fabricate. Never invent experience, metrics, tools, employers, titles, or dates. Never add skills that aren't already present in the source resume. You may reorder, re-emphasize, rephrase, and cut bullets. You may adjust the professional summary to align with the job, but only using facts already present.
+const TAILORED_RESUME_GUIDE = `You are tailoring a resume for a specific job. Follow these rules precisely.
 
-Output plain text only - no markdown, no JSON. Just a clean text resume ready to paste into a form.
+PRIME DIRECTIVE: Do not fabricate. Never invent experience, metrics, tools, employers, titles, dates, degrees, certifications, or skills. If a job requires something the source resume doesn't have, omit gracefully — do not claim it.
 
-Structure:
-- Name + contact (copy verbatim from source)
-- Professional Summary (2-3 sentences, tailored but factual)
-- Skills (only skills present in source, prioritized by job relevance)
-- Experience (reorder bullets within each role by job relevance; cut irrelevant bullets; keep all dates/titles/employers unchanged)
-- Education (unchanged)
+WHAT YOU CAN DO:
+- Reorder bullets within a role, skills within a section
+- Re-emphasize: move relevant experience higher, cut irrelevant bullets
+- Rephrase: use the job's terminology if source describes the same thing differently
+- Tighten: shorter is better, cut filler, use strong verbs
+- Tailor the summary: rewrite 2-3 sentence professional summary using facts from source, angled toward this job
+- Match keywords: if job says "Kubernetes" and source says "K8s", use "Kubernetes" — same concept
 
-If the source resume is missing something the job requires, DO NOT add it. Just omit. The user will see gaps and decide themselves.`;
+WHAT YOU CANNOT DO:
+- Add a skill, tool, or responsibility not already in source
+- Change dates, titles, company names, employment periods
+- Invent metrics or scope ("led team of 12" when source says "led team")
+- Claim certifications, degrees, or languages not listed
+- Invent quantitative achievements or project names
+
+TONE:
+- Active voice, past tense for completed work, present tense for current role
+- Start bullets with strong verbs (led, shipped, reduced, architected, implemented)
+- NO corporate filler: no "passionate", "thrilled", "excited", "results-driven", "team player", "go-getter", "dynamic", "synergy"
+
+STRUCTURE (in this order):
+1. Name + contact — copy verbatim from source
+2. Professional Summary — 2-3 sentences, tailored to this job's language, facts from source only
+3. Skills — reorder by relevance to this job; remove irrelevant skills (don't add new ones)
+4. Experience — per role: keep title/company/dates unchanged; reorder bullets by relevance; cut bullets that don't support this job; rephrase using job's terminology where applicable
+5. Education / Certifications — unchanged
+6. Projects — only if present in source
+
+ATS:
+- Match exact phrasing of required skills where source supports it
+- No graphics, tables, columns, icons — plain text only
+- Use standard section headers (Experience, Skills, Education)
+- Spell out acronyms on first use if job description does
+
+HANDLING GAPS:
+- Don't claim it. Don't relabel adjacent experience.
+- Don't mention it ("eager to learn X" is corporate filler — avoid).
+- Lean into adjacent strengths and let the reader make the leap.
+
+OUTPUT:
+- Plain text only. No markdown, no JSON, no bullet characters other than "-".
+- Ready to paste into a form field.
+- No preamble ("Here is your tailored resume:") and no trailing commentary.
+- ~450-550 words of actual resume content.
+
+AVOID:
+- Cramming keywords unnaturally
+- Using job description verbatim for responsibilities (sounds fake)
+- Rewriting bullets from scratch (you're tailoring, not drafting)
+- Removing numbers or specific nouns (those are credibility anchors)
+- Adding "Why I'm a fit" (that's a cover letter)
+- Stating years of experience not present in source`;
 
 export async function generateTailoredResume(
   ai: Ai,
@@ -202,10 +247,20 @@ export async function generateTailoredResume(
 ): Promise<string> {
   const response = await ai.run(TEXT_MODEL, {
     messages: [
-      { role: 'system', content: TAILORED_RESUME_SYSTEM },
+      { role: 'system', content: TAILORED_RESUME_GUIDE },
       {
         role: 'user',
-        content: `SOURCE RESUME (do not fabricate beyond this):\n${resumeText}\n\n---\n\nTARGET JOB: ${jobTitle} at ${company}\n\nJOB DESCRIPTION:\n${jobDescription.slice(0, 3000)}`,
+        content: `SOURCE RESUME (do not fabricate beyond this):
+${resumeText}
+
+---
+
+TARGET JOB: ${jobTitle} at ${company}
+
+JOB DESCRIPTION:
+${jobDescription.slice(0, 3500)}
+
+Output the tailored plain-text resume now. No preamble.`,
       },
     ],
     max_tokens: 2500,

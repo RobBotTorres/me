@@ -474,12 +474,38 @@ async function tailorResume(appId) {
     if (!resumes.resumes?.length) return alert('Upload a resume first.');
     resumeId = resumes.resumes[0].id;
   }
+
   const btns = document.querySelectorAll(`button[onclick="tailorResume(${appId})"]`);
-  btns.forEach(b => { b.textContent = 'Tailoring...'; b.disabled = true; });
+  btns.forEach(b => {
+    b.innerHTML = '<span class="spinner"></span> Tailoring...';
+    b.disabled = true;
+  });
+
+  // Inline status banner right under the card so the user sees progress
+  const card = btns[0]?.closest('.card');
+  let statusEl = null;
+  if (card) {
+    statusEl = document.createElement('div');
+    statusEl.className = 'mt-3 text-xs text-purple-700 bg-purple-50 border border-purple-200 rounded px-3 py-2 flex items-center gap-2';
+    statusEl.innerHTML = '<span class="spinner"></span><span>AI is tailoring your resume for this job. Typically 20-40 seconds.</span>';
+    card.appendChild(statusEl);
+  }
+
+  const start = Date.now();
   try {
-    await api(`/applications/${appId}/tailor-resume`, { method: 'POST', body: JSON.stringify({ resume_id: resumeId }) });
+    await api(`/applications/${appId}/tailor-resume`, {
+      method: 'POST',
+      body: JSON.stringify({ resume_id: resumeId }),
+    });
+    const seconds = Math.round((Date.now() - start) / 1000);
+    if (statusEl) {
+      statusEl.className = 'mt-3 text-xs text-green-700 bg-green-50 border border-green-200 rounded px-3 py-2';
+      statusEl.textContent = `✓ Tailored resume ready (${seconds}s). Expand 'View Tailored Resume' below to see it.`;
+      setTimeout(() => statusEl?.remove(), 5000);
+    }
     loadApplications();
   } catch (e) {
+    if (statusEl) statusEl.remove();
     alert('Error: ' + e.message);
     btns.forEach(b => { b.textContent = 'Tailor Resume'; b.disabled = false; });
   }
