@@ -127,6 +127,44 @@ applications.delete('/:id', async (c) => {
   return c.json({ success: true });
 });
 
+// Generate cover letter for an application and save it
+applications.post('/:id/cover-letter', async (c) => {
+  const id = c.req.param('id');
+  const app = await c.env.DB.prepare(`
+    SELECT a.*, j.title as job_title, j.company, j.description as job_description
+    FROM applications a JOIN jobs j ON a.job_id = j.id WHERE a.id = ?
+  `).bind(id).first<{
+    resume_id: number | null;
+    job_title: string;
+    company: string;
+    job_description: string;
+  }>();
+  if (!app) return c.json({ error: 'Application not found' }, 404);
+
+  const body = await c.req.json<{ resume_id?: number }>().catch(() => ({ resume_id: undefined }));
+  const resumeId = body.resume_id || app.resume_id;
+  if (!resumeId) return c.json({ error: 'No resume linked. Pass resume_id or link one to the application.' }, 400);
+
+  const resume = await c.env.DB.prepare('SELECT * FROM resumes WHERE id = ?')
+    .bind(resumeId).first<Resume>();
+  if (!resume) return c.json({ error: 'Resume not found' }, 404);
+
+  const { generateCoverLetter } = await import('../services/ai');
+  const coverLetter = await generateCoverLetter(
+    c.env.AI,
+    resume.raw_text,
+    app.job_title,
+    app.company,
+    app.job_description || ''
+  );
+
+  await c.env.DB.prepare(
+    `UPDATE applications SET cover_letter = ?, resume_id = ?, updated_at = datetime('now') WHERE id = ?`
+  ).bind(coverLetter, resumeId, id).run();
+
+  return c.json({ cover_letter: coverLetter });
+});
+
 // Generate tailored resume for an application (strict no-fabrication)
 applications.post('/:id/tailor-resume', async (c) => {
   const id = c.req.param('id');

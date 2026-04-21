@@ -454,12 +454,15 @@ async function loadApplications() {
           <select onchange="updateAppStatus(${a.id}, this.value)" onclick="event.stopPropagation()" class="border rounded px-2 py-1 text-xs">
             ${['saved','applied','screening','interview','offer','rejected','withdrawn'].map(s => `<option value="${s}" ${a.status === s ? 'selected' : ''}>${s}</option>`).join('')}
           </select>
-          <button onclick="event.stopPropagation(); toggleManage(${a.id})" class="text-xs text-indigo-600 hover:underline">Manage</button>
-          <button onclick="event.stopPropagation(); tailorResume(${a.id})" class="text-xs text-purple-600 hover:underline">Tailor Resume</button>
+          <button id="manage-btn-${a.id}" onclick="event.stopPropagation(); toggleManage(${a.id})" class="text-xs text-indigo-600 hover:underline">Manage</button>
+          <button id="tailor-btn-${a.id}" onclick="event.stopPropagation(); tailorResume(${a.id})" class="text-xs text-purple-600 hover:underline">Tailor Resume</button>
+          <button id="cover-btn-${a.id}" onclick="event.stopPropagation(); generateCover(${a.id})" class="text-xs text-orange-600 hover:underline">Cover Letter</button>
           <button onclick="event.stopPropagation(); deleteApp(${a.id})" class="text-red-500 hover:text-red-700 text-xs">✕</button>
         </div>
       </div>
+      <div id="ai-status-${a.id}"></div>
       ${a.tailored_resume ? `<details class="mt-3"><summary class="text-xs text-purple-700 cursor-pointer">View Tailored Resume</summary><pre class="text-xs bg-gray-50 p-3 mt-2 rounded whitespace-pre-wrap font-sans">${esc(a.tailored_resume)}</pre></details>` : ''}
+      ${a.cover_letter ? `<details class="mt-2"><summary class="text-xs text-orange-700 cursor-pointer">View Cover Letter</summary><pre class="text-xs bg-gray-50 p-3 mt-2 rounded whitespace-pre-wrap font-sans">${esc(a.cover_letter)}</pre></details>` : ''}
       ${a.notes ? `<p class="text-xs text-gray-500 mt-1">${esc(a.notes)}</p>` : ''}
       <div id="manage-${a.id}" class="hidden mt-3 pt-3 border-t"></div>
     </div>`).join('');
@@ -638,49 +641,78 @@ async function deleteComm(appId, commId) {
 }
 async function deleteApp(id) { if (!confirm('Remove?')) return; await api('/applications/' + id, { method: 'DELETE' }); loadApplications(); }
 
-async function tailorResume(appId) {
+async function resolveResumeId(appId) {
   const app = await api('/applications/' + appId);
   let resumeId = app.application?.resume_id;
   if (!resumeId) {
     const resumes = await api('/resumes');
-    if (!resumes.resumes?.length) return alert('Upload a resume first.');
+    if (!resumes.resumes?.length) { alert('Upload a resume first.'); return null; }
     resumeId = resumes.resumes[0].id;
   }
+  return resumeId;
+}
 
-  const btns = document.querySelectorAll(`button[onclick="tailorResume(${appId})"]`);
-  btns.forEach(b => {
-    b.innerHTML = '<span class="spinner"></span> Tailoring...';
-    b.disabled = true;
-  });
+const AI_ACCENTS = {
+  purple: 'mt-3 text-xs text-purple-800 bg-purple-50 border border-purple-200 rounded px-3 py-2 flex items-center gap-2',
+  orange: 'mt-3 text-xs text-orange-800 bg-orange-50 border border-orange-200 rounded px-3 py-2 flex items-center gap-2',
+};
 
-  // Inline status banner right under the card so the user sees progress
-  const card = btns[0]?.closest('.card');
-  let statusEl = null;
-  if (card) {
-    statusEl = document.createElement('div');
-    statusEl.className = 'mt-3 text-xs text-purple-700 bg-purple-50 border border-purple-200 rounded px-3 py-2 flex items-center gap-2';
-    statusEl.innerHTML = '<span class="spinner"></span><span>AI is tailoring your resume for this job. Typically 20-40 seconds.</span>';
-    card.appendChild(statusEl);
+// Runs an AI task with visible loading state: spinner in button, banner in card, success/error handling.
+async function runAiTask(appId, opts) {
+  const { btnId, runningText, endpoint, accent, successLabel } = opts;
+  const resumeId = await resolveResumeId(appId);
+  if (!resumeId) return;
+
+  const btn = document.getElementById(btnId);
+  const originalHTML = btn?.innerHTML;
+  if (btn) {
+    btn.innerHTML = `<span class="spinner"></span> ${runningText}...`;
+    btn.disabled = true;
+  }
+
+  const statusEl = document.getElementById(`ai-status-${appId}`);
+  if (statusEl) {
+    statusEl.className = AI_ACCENTS[accent] || AI_ACCENTS.purple;
+    statusEl.innerHTML = `<span class="spinner"></span><span>AI is ${runningText.toLowerCase()} for this job. Typically 20-40 seconds.</span>`;
   }
 
   const start = Date.now();
   try {
-    await api(`/applications/${appId}/tailor-resume`, {
-      method: 'POST',
-      body: JSON.stringify({ resume_id: resumeId }),
-    });
+    await api(endpoint, { method: 'POST', body: JSON.stringify({ resume_id: resumeId }) });
     const seconds = Math.round((Date.now() - start) / 1000);
     if (statusEl) {
-      statusEl.className = 'mt-3 text-xs text-green-700 bg-green-50 border border-green-200 rounded px-3 py-2';
-      statusEl.textContent = `✓ Tailored resume ready (${seconds}s). Expand 'View Tailored Resume' below to see it.`;
-      setTimeout(() => statusEl?.remove(), 5000);
+      statusEl.className = 'mt-3 text-xs text-green-800 bg-green-50 border border-green-200 rounded px-3 py-2';
+      statusEl.textContent = `✓ ${successLabel} ready (${seconds}s). Expand below to view.`;
+      setTimeout(() => { if (statusEl) { statusEl.innerHTML = ''; statusEl.className = ''; } }, 5000);
     }
     loadApplications();
   } catch (e) {
-    if (statusEl) statusEl.remove();
-    alert('Error: ' + e.message);
-    btns.forEach(b => { b.textContent = 'Tailor Resume'; b.disabled = false; });
+    if (statusEl) {
+      statusEl.className = 'mt-3 text-xs text-red-800 bg-red-50 border border-red-200 rounded px-3 py-2';
+      statusEl.textContent = `✗ Error: ${e.message}`;
+    }
+    if (btn) { btn.innerHTML = originalHTML; btn.disabled = false; }
   }
+}
+
+async function tailorResume(appId) {
+  return runAiTask(appId, {
+    btnId: `tailor-btn-${appId}`,
+    runningText: 'Tailoring',
+    endpoint: `/applications/${appId}/tailor-resume`,
+    accent: 'purple',
+    successLabel: 'Tailored resume',
+  });
+}
+
+async function generateCover(appId) {
+  return runAiTask(appId, {
+    btnId: `cover-btn-${appId}`,
+    runningText: 'Writing cover letter',
+    endpoint: `/applications/${appId}/cover-letter`,
+    accent: 'orange',
+    successLabel: 'Cover letter',
+  });
 }
 
 async function loadResumes() {
