@@ -236,7 +236,84 @@ AVOID:
 - Rewriting bullets from scratch (you're tailoring, not drafting)
 - Removing numbers or specific nouns (those are credibility anchors)
 - Adding "Why I'm a fit" (that's a cover letter)
-- Stating years of experience not present in source`;
+- Stating years of experience not present in source
+
+=== FEW-SHOT EXAMPLES ===
+
+# Example 1: Summary repositioning
+
+Source: "Technical operations leader with 12 years of experience. Managed e-commerce platforms for wine industry brands. Expertise in full-stack development, project management, and platform integrations."
+
+→ Tailored for "Senior Technical Program Manager" (SaaS):
+"Operations leader with 12 years driving cross-functional platform initiatives. Led multi-stakeholder e-commerce implementations at scale, coordinating engineering, product, and business teams through complex integrations. Specialized in technical program management where domain knowledge meets execution."
+
+→ Tailored for "Director of E-commerce Operations" (DTC):
+"E-commerce operations leader with 12 years running production platforms for consumer brands. Deep DTC expertise with full ownership of tech stack decisions, team leadership, and day-to-day platform operations. Wine industry background brings category-specific operational insight."
+
+Both use only source facts. Different angle and keywords. Same honest story.
+
+# Example 2: Bullet transformation
+
+Source: "Led migration from legacy platform to Shopify Plus; reduced checkout abandonment by 22% and site load time by 1.8s"
+
+→ For "Technical Program Manager":
+"Led platform migration to Shopify Plus, managing scope, timeline, and cross-functional handoffs across engineering, ops, and marketing. Shipped with measurable outcomes: 22% drop in checkout abandonment, 1.8s load time improvement."
+
+→ For "Technical Operations Manager":
+"Architected and executed migration from legacy platform to Shopify Plus. Drove 22% reduction in checkout abandonment and 1.8s improvement in load time through targeted technical interventions."
+
+→ For "Solutions Engineer":
+"Designed and implemented end-to-end platform migration to Shopify Plus, evaluating tradeoffs across performance, integrations, and cost. Delivered 22% checkout conversion lift and 1.8s load time reduction."
+
+Same work, different voice. PM = coordination. TechOps = execution. SE = solution design.
+
+# Example 3: Skills reordering
+
+Source: "JavaScript, PHP, Cloudflare Workers, AWS, React, Shopify, API Integration, GA4, Looker Studio, Postman"
+
+→ For "Technical Program Manager - E-commerce":
+"Shopify, API Integration, AWS, Cloudflare Workers, JavaScript, React, GA4, Looker Studio, PHP, Postman"
+
+→ For "Senior Full-Stack Developer":
+"JavaScript, React, PHP, AWS, Cloudflare Workers, API Integration, Shopify, Postman, GA4, Looker Studio"
+
+Reorder by the job's priorities. Nothing added, nothing removed.
+
+# Example 4: Gap handling (critical)
+
+Job requires: Python, Kubernetes, Go. Source has: JavaScript, Node.js, Docker, AWS.
+
+WRONG (fabrication): "Skills: JavaScript, Node.js, Docker, AWS, Python, Kubernetes"
+WRONG (corporate filler): "Seeking to leverage Node.js background while expanding into Python"
+RIGHT: Lead with Node.js, Docker, AWS prominently. Do not mention Python, Kubernetes, or Go. Let the reader evaluate.
+
+If multiple critical gaps exist, include hidden comment at top: <!-- GAP: Python/Kubernetes/Go not in source; match weak -->
+
+# Example 5: Anti-patterns — never write these
+
+"Highly passionate technical operations leader" — drop "highly passionate"
+"Results-driven team player with a go-getter attitude" — all filler
+"Eager to leverage synergies in a dynamic environment" — corporate nonsense
+"Led team of 15" when source says "team" — inventing scale
+"Reduced costs by 30%" when source has no metric — inventing numbers
+"Expert in Kubernetes" when source doesn't mention it — fabrication
+"Proficient in modern JavaScript frameworks" — prefer specific names from source
+
+# Example 6: Industry pivot framing (wine/CPG → tech)
+
+WRONG (hides the pivot):
+"Technical program manager with 12 years managing platforms at scale..."
+(Buries industry context, credibility claims feel thin)
+
+WRONG (leads with wine too hard for tech):
+"Passionate wine industry veteran bringing 12 years of DTC commerce expertise..."
+(Telegraphs 'not really tech' in line 1)
+
+RIGHT (lets the pivot breathe):
+"Technical operations leader with 12 years managing production e-commerce platforms. Background includes DTC wine commerce — a category-specific crash course in complex integrations (compliance, tax, shipping, fulfillment) that translates directly to any multi-layer SaaS implementation."
+(Tech identity first. Industry as a differentiated asset, not an apology.)
+
+Non-tech background = asset (domain complexity) or omitted where neutral. Never a liability.`;
 
 export async function generateTailoredResume(
   ai: Ai,

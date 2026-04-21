@@ -88,3 +88,99 @@ If the job requires something the source doesn't have:
 - Led cross-functional engineering team through platform migration, managing scope, timeline, and stakeholder communication
 
 Same underlying fact. Different emphasis.
+
+---
+
+## Full Few-Shot Examples
+
+The AI should reference these patterns on every call.
+
+### Example 1 — Professional Summary Repositioning
+
+**Source summary:**
+> Technical operations leader with 12 years of experience. Managed e-commerce platforms for wine industry brands. Expertise in full-stack development, project management, and platform integrations.
+
+**Tailored for "Senior Technical Program Manager" (SaaS company):**
+> Operations leader with 12 years driving cross-functional platform initiatives. Led multi-stakeholder e-commerce implementations at scale, coordinating engineering, product, and business teams through complex integrations. Specialized in technical program management where domain knowledge meets execution.
+
+**Tailored for "Director of E-commerce Operations" (DTC brand):**
+> E-commerce operations leader with 12 years running production platforms for consumer brands. Deep DTC expertise with full ownership of tech stack decisions, team leadership, and day-to-day platform operations. Background in wine industry brings category-specific operational insight.
+
+Both use only facts from the source. Different angle, different keywords, same honest story.
+
+### Example 2 — Bullet Transformation
+
+**Source bullet:**
+> Led migration from legacy platform to Shopify Plus; reduced checkout abandonment by 22% and site load time by 1.8s
+
+**Tailored for "Technical Program Manager":**
+> Led platform migration to Shopify Plus, managing scope, timeline, and cross-functional handoffs across engineering, ops, and marketing. Shipped with measurable outcomes: 22% drop in checkout abandonment, 1.8s load time improvement.
+
+**Tailored for "Technical Operations Manager":**
+> Architected and executed migration from legacy platform to Shopify Plus. Drove 22% reduction in checkout abandonment and 1.8s improvement in load time through targeted technical interventions.
+
+**Tailored for "Solutions Engineer":**
+> Designed and implemented end-to-end platform migration to Shopify Plus, evaluating tradeoffs across performance, integrations, and cost. Delivered 22% checkout conversion lift and 1.8s load time reduction.
+
+Same work. Different voice. PM emphasizes coordination; TechOps emphasizes execution; SE emphasizes solution design.
+
+### Example 3 — Skills Reordering
+
+**Source skills (as listed):**
+> JavaScript, PHP, Cloudflare Workers, AWS, React, Shopify, API Integration, GA4, Looker Studio, Postman
+
+**Tailored for "Technical Program Manager - E-commerce":**
+> Shopify, API Integration, AWS, Cloudflare Workers, JavaScript, React, GA4, Looker Studio, PHP, Postman
+
+**Tailored for "Senior Full-Stack Developer":**
+> JavaScript, React, PHP, AWS, Cloudflare Workers, API Integration, Shopify, Postman, GA4, Looker Studio
+
+Same skills. Reordered by the job's likely priorities. **Nothing added, nothing removed.**
+
+### Example 4 — Gap Handling (Critical)
+
+**Job requires:** Python, Kubernetes, Go
+**Source has:** JavaScript, Node.js, Docker, AWS
+
+**❌ WRONG (fabrication):**
+> Skills: JavaScript, Node.js, Docker, AWS, Python, Kubernetes
+
+**❌ WRONG (corporate filler):**
+> Seeking to leverage Node.js background while expanding into Python and Kubernetes
+
+**✅ RIGHT:**
+> Lead with Node.js, Docker, AWS prominently. Do not mention Python, Kubernetes, or Go. Let the reader evaluate adjacency on their own.
+
+If multiple critical gaps exist, the tailoring can only do so much — the user needs to know. Include a hidden HTML-style comment at the top:
+> `<!-- GAP: Python/Kubernetes/Go not in source; match weak -->`
+
+### Example 5 — Anti-Patterns (Never Write These)
+
+- "Highly passionate technical operations leader" — drop "highly passionate"
+- "Results-driven team player with a go-getter attitude" — all filler, zero info
+- "Eager to leverage synergies in a dynamic environment" — textbook corporate nonsense
+- "Led team of 15" when source just says "team" — inventing scale
+- "Reduced costs by 30%" when source has no metric — inventing numbers
+- "Expert in Kubernetes" when source doesn't mention it — fabrication
+- "Proficient in modern JavaScript frameworks" as a catch-all — prefer specific names from source
+
+### Example 6 — Industry Pivot Framing (for career transitions)
+
+For someone pivoting from wine/CPG to tech, when tailoring for tech roles:
+
+**❌ WRONG (hides the pivot):**
+> Summary: Technical program manager with 12 years managing platforms at scale...
+>
+> (Buries industry context entirely, makes credibility claims feel thin)
+
+**❌ WRONG (leads with wine too hard for tech audience):**
+> Summary: Passionate wine industry veteran bringing 12 years of DTC commerce expertise...
+>
+> (Telegraphs "not really a tech person" in first line)
+
+**✅ RIGHT (lets the pivot breathe):**
+> Summary: Technical operations leader with 12 years managing production e-commerce platforms. Background includes DTC wine commerce — a category-specific crash course in complex integrations (compliance, tax, shipping, fulfillment) that translates directly to any multi-layer SaaS implementation.
+>
+> (Tech identity first. Industry as a differentiated asset, not an apology.)
+
+The user's non-tech background is either an asset (relevant domain complexity) or omitted where it's neutral. Never frame it as a liability.
