@@ -86,6 +86,7 @@ applications.patch('/:id', async (c) => {
     status?: string;
     notes?: string;
     cover_letter?: string;
+    custom_url?: string;
     applied_at?: string;
     interview_at?: string;
   }>();
@@ -106,6 +107,7 @@ applications.patch('/:id', async (c) => {
     }
   }
   if (body.notes !== undefined) { updates.push('notes = ?'); params.push(body.notes); }
+  if (body.custom_url !== undefined) { updates.push('custom_url = ?'); params.push(body.custom_url); }
   if (body.cover_letter !== undefined) { updates.push('cover_letter = ?'); params.push(body.cover_letter); }
   if (body.applied_at) { updates.push('applied_at = ?'); params.push(body.applied_at); }
   if (body.interview_at) { updates.push('interview_at = ?'); params.push(body.interview_at); }

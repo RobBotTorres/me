@@ -110,6 +110,7 @@ export interface Application {
   cover_letter: string | null;
   tailored_resume: string | null;
   notes: string | null;
+  custom_url: string | null;
   applied_at: string | null;
   interview_at: string | null;
   created_at: string;

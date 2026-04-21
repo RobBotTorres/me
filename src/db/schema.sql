@@ -63,6 +63,7 @@ CREATE TABLE IF NOT EXISTS applications (
   cover_letter TEXT,
   tailored_resume TEXT,
   notes TEXT,
+  custom_url TEXT,
   applied_at TEXT,
   interview_at TEXT,
   created_at TEXT DEFAULT (datetime('now')),

@@ -461,9 +461,10 @@ async function loadApplications() {
         </div>
       </div>
       <div id="ai-status-${a.id}"></div>
+      ${a.custom_url ? `<p class="text-xs mt-1"><a href="${esc(a.custom_url)}" target="_blank" class="text-blue-600 hover:underline">${esc(a.custom_url)} ↗</a></p>` : ''}
       ${a.tailored_resume ? `<details class="mt-3"><summary class="text-xs text-purple-700 cursor-pointer">View Tailored Resume</summary><pre class="text-xs bg-gray-50 p-3 mt-2 rounded whitespace-pre-wrap font-sans">${esc(a.tailored_resume)}</pre></details>` : ''}
       ${a.cover_letter ? `<details class="mt-2"><summary class="text-xs text-orange-700 cursor-pointer">View Cover Letter</summary><pre class="text-xs bg-gray-50 p-3 mt-2 rounded whitespace-pre-wrap font-sans">${esc(a.cover_letter)}</pre></details>` : ''}
-      ${a.notes ? `<p class="text-xs text-gray-500 mt-1">${esc(a.notes)}</p>` : ''}
+      ${a.notes ? `<p class="text-xs text-gray-600 mt-2 whitespace-pre-wrap">${esc(a.notes)}</p>` : ''}
       <div id="manage-${a.id}" class="hidden mt-3 pt-3 border-t"></div>
     </div>`).join('');
 }
@@ -480,12 +481,14 @@ async function toggleManage(appId) {
 }
 
 async function renderManage(appId) {
-  const [cData, mData] = await Promise.all([
+  const [cData, mData, appData] = await Promise.all([
     api(`/applications/${appId}/contacts`),
     api(`/applications/${appId}/communications`),
+    api(`/applications/${appId}`),
   ]);
   const contacts = cData.contacts || [];
   const comms = mData.communications || [];
+  const app = appData.application || {};
 
   const el = document.getElementById('manage-' + appId);
   if (!el) return;
@@ -527,6 +530,23 @@ async function renderManage(appId) {
   const contactOptions = contacts.map(c => `<option value="${c.id}">${esc(c.name)}${c.role ? ` (${esc(c.role)})` : ''}</option>`).join('');
 
   el.innerHTML = `
+    <section class="mb-4 p-3 bg-gray-50 border rounded">
+      <h4 class="text-sm font-semibold mb-2">Notes &amp; URL</h4>
+      <div class="space-y-2">
+        <div>
+          <label class="block text-xs font-medium text-gray-700 mb-1">Custom URL (overrides job link)</label>
+          <input id="a-url-${appId}" type="url" placeholder="https://..." value="${esc(app.custom_url || '')}" class="w-full border rounded px-2 py-1 text-xs">
+        </div>
+        <div>
+          <label class="block text-xs font-medium text-gray-700 mb-1">Notes</label>
+          <textarea id="a-notes-${appId}" rows="3" placeholder="Anything worth tracking..." class="w-full border rounded px-2 py-1 text-xs">${esc(app.notes || '')}</textarea>
+        </div>
+        <div class="flex items-center gap-2">
+          <button onclick="saveAppMeta(${appId})" id="app-meta-btn-${appId}" class="bg-indigo-600 text-white px-3 py-1 rounded text-xs hover:bg-indigo-700">Save</button>
+          <span id="app-meta-status-${appId}" class="text-xs text-gray-500"></span>
+        </div>
+      </div>
+    </section>
     <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
       <section>
         <h4 class="text-sm font-semibold mb-2">Contacts (${contacts.length})</h4>
@@ -591,6 +611,26 @@ async function renderManage(appId) {
         </details>
       </section>
     </div>`;
+}
+
+async function saveAppMeta(appId) {
+  const notes = document.getElementById('a-notes-' + appId).value;
+  const custom_url = document.getElementById('a-url-' + appId).value.trim();
+  const btn = document.getElementById('app-meta-btn-' + appId);
+  const status = document.getElementById('app-meta-status-' + appId);
+  if (btn) { btn.disabled = true; btn.textContent = 'Saving...'; }
+  try {
+    await api('/applications/' + appId, {
+      method: 'PATCH',
+      body: JSON.stringify({ notes, custom_url }),
+    });
+    if (status) { status.textContent = '✓ Saved'; status.className = 'text-xs text-green-700'; setTimeout(() => { status.textContent = ''; }, 3000); }
+    loadApplications();
+  } catch (e) {
+    if (status) { status.textContent = 'Error: ' + e.message; status.className = 'text-xs text-red-600'; }
+  } finally {
+    if (btn) { btn.disabled = false; btn.textContent = 'Save'; }
+  }
 }
 
 async function addContact(appId) {
