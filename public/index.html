@@ -455,8 +455,8 @@ async function loadApplications() {
             ${['saved','applied','screening','interview','offer','rejected','withdrawn'].map(s => `<option value="${s}" ${a.status === s ? 'selected' : ''}>${s}</option>`).join('')}
           </select>
           <button id="manage-btn-${a.id}" onclick="event.stopPropagation(); toggleManage(${a.id})" class="text-xs text-indigo-600 hover:underline">Manage</button>
-          <button id="tailor-btn-${a.id}" onclick="event.stopPropagation(); tailorResume(${a.id})" class="text-xs text-purple-600 hover:underline">Tailor Resume</button>
-          <button id="cover-btn-${a.id}" onclick="event.stopPropagation(); generateCover(${a.id})" class="text-xs text-orange-600 hover:underline">Cover Letter</button>
+          <button id="tailor-btn-${a.id}" onclick="event.stopPropagation(); tailorResume(${a.id})" class="text-xs text-purple-600 hover:underline">${a.tailored_resume ? 'Redo Resume' : 'Tailor Resume'}</button>
+          <button id="cover-btn-${a.id}" onclick="event.stopPropagation(); generateCover(${a.id})" class="text-xs text-orange-600 hover:underline">${a.cover_letter ? 'Redo Cover Letter' : 'Cover Letter'}</button>
           <button onclick="event.stopPropagation(); deleteApp(${a.id})" class="text-red-500 hover:text-red-700 text-xs">✕</button>
         </div>
       </div>
