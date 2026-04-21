@@ -76,6 +76,32 @@ export interface Job {
 
 export type JobLane = 'fast_income' | 'lateral' | 'stretch';
 
+export interface ApplicationContact {
+  id: number;
+  application_id: number;
+  name: string;
+  role: string | null;       // recruiter | hiring_manager | interviewer | referral | other
+  email: string | null;
+  phone: string | null;
+  linkedin: string | null;
+  notes: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface ApplicationCommunication {
+  id: number;
+  application_id: number;
+  contact_id: number | null;
+  direction: 'sent' | 'received';
+  channel: 'email' | 'phone' | 'linkedin' | 'in_person' | 'other';
+  summary: string | null;
+  occurred_at: string;
+  next_action: string | null;
+  next_action_due: string | null;
+  created_at: string;
+}
+
 export interface Application {
   id: number;
   job_id: number;

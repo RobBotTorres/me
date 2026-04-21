@@ -164,6 +164,143 @@ applications.post('/:id/tailor-resume', async (c) => {
   return c.json({ tailored_resume: tailored });
 });
 
+// --- CONTACTS ---
+
+// List contacts for an application
+applications.get('/:id/contacts', async (c) => {
+  const id = c.req.param('id');
+  const rows = await c.env.DB.prepare(
+    'SELECT * FROM application_contacts WHERE application_id = ? ORDER BY created_at DESC'
+  ).bind(id).all();
+  return c.json({ contacts: rows.results });
+});
+
+applications.post('/:id/contacts', async (c) => {
+  const id = c.req.param('id');
+  const body = await c.req.json<{
+    name: string; role?: string; email?: string; phone?: string;
+    linkedin?: string; notes?: string;
+  }>();
+  if (!body.name) return c.json({ error: 'name is required' }, 400);
+
+  const result = await c.env.DB.prepare(`
+    INSERT INTO application_contacts (application_id, name, role, email, phone, linkedin, notes)
+    VALUES (?, ?, ?, ?, ?, ?, ?)
+  `).bind(
+    id, body.name,
+    body.role || null, body.email || null, body.phone || null,
+    body.linkedin || null, body.notes || null
+  ).run();
+  return c.json({ id: result.meta.last_row_id }, 201);
+});
+
+applications.patch('/:id/contacts/:contactId', async (c) => {
+  const contactId = c.req.param('contactId');
+  const body = await c.req.json<{
+    name?: string; role?: string; email?: string; phone?: string;
+    linkedin?: string; notes?: string;
+  }>();
+  const fields: string[] = [];
+  const params: (string | null)[] = [];
+  for (const key of ['name', 'role', 'email', 'phone', 'linkedin', 'notes'] as const) {
+    if (body[key] !== undefined) {
+      fields.push(`${key} = ?`);
+      params.push(body[key] ?? null);
+    }
+  }
+  if (fields.length === 0) return c.json({ error: 'No fields' }, 400);
+  fields.push("updated_at = datetime('now')");
+  params.push(contactId);
+  await c.env.DB.prepare(
+    `UPDATE application_contacts SET ${fields.join(', ')} WHERE id = ?`
+  ).bind(...params).run();
+  return c.json({ success: true });
+});
+
+applications.delete('/:id/contacts/:contactId', async (c) => {
+  const contactId = c.req.param('contactId');
+  await c.env.DB.prepare('DELETE FROM application_contacts WHERE id = ?').bind(contactId).run();
+  return c.json({ success: true });
+});
+
+// --- COMMUNICATIONS ---
+
+applications.get('/:id/communications', async (c) => {
+  const id = c.req.param('id');
+  const rows = await c.env.DB.prepare(`
+    SELECT c.*, ct.name as contact_name, ct.role as contact_role
+    FROM application_communications c
+    LEFT JOIN application_contacts ct ON c.contact_id = ct.id
+    WHERE c.application_id = ?
+    ORDER BY c.occurred_at DESC
+  `).bind(id).all();
+  return c.json({ communications: rows.results });
+});
+
+applications.post('/:id/communications', async (c) => {
+  const id = c.req.param('id');
+  const body = await c.req.json<{
+    contact_id?: number;
+    direction: 'sent' | 'received';
+    channel: string;
+    summary?: string;
+    occurred_at?: string;
+    next_action?: string;
+    next_action_due?: string;
+  }>();
+  if (!body.direction || !body.channel) {
+    return c.json({ error: 'direction and channel required' }, 400);
+  }
+  const result = await c.env.DB.prepare(`
+    INSERT INTO application_communications
+      (application_id, contact_id, direction, channel, summary,
+       occurred_at, next_action, next_action_due)
+    VALUES (?, ?, ?, ?, ?, COALESCE(?, datetime('now')), ?, ?)
+  `).bind(
+    id,
+    body.contact_id ?? null,
+    body.direction, body.channel,
+    body.summary || null,
+    body.occurred_at || null,
+    body.next_action || null,
+    body.next_action_due || null
+  ).run();
+  return c.json({ id: result.meta.last_row_id }, 201);
+});
+
+applications.patch('/:id/communications/:commId', async (c) => {
+  const commId = c.req.param('commId');
+  const body = await c.req.json<{
+    contact_id?: number | null;
+    direction?: string;
+    channel?: string;
+    summary?: string;
+    occurred_at?: string;
+    next_action?: string;
+    next_action_due?: string;
+  }>();
+  const fields: string[] = [];
+  const params: (string | number | null)[] = [];
+  for (const key of ['contact_id', 'direction', 'channel', 'summary', 'occurred_at', 'next_action', 'next_action_due'] as const) {
+    if (body[key] !== undefined) {
+      fields.push(`${key} = ?`);
+      params.push(body[key] ?? null);
+    }
+  }
+  if (fields.length === 0) return c.json({ error: 'No fields' }, 400);
+  params.push(commId);
+  await c.env.DB.prepare(
+    `UPDATE application_communications SET ${fields.join(', ')} WHERE id = ?`
+  ).bind(...params).run();
+  return c.json({ success: true });
+});
+
+applications.delete('/:id/communications/:commId', async (c) => {
+  const commId = c.req.param('commId');
+  await c.env.DB.prepare('DELETE FROM application_communications WHERE id = ?').bind(commId).run();
+  return c.json({ success: true });
+});
+
 // Get application pipeline stats
 applications.get('/stats/pipeline', async (c) => {
   const stats = await c.env.DB.prepare(`
