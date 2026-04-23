@@ -13,7 +13,8 @@ applications.get('/', async (c) => {
   let query = `
     SELECT a.*, j.title as job_title, j.company, j.location, j.url as job_url, j.match_score,
       (SELECT COUNT(*) FROM application_contacts WHERE application_id = a.id) as contact_count,
-      (SELECT COUNT(*) FROM application_communications WHERE application_id = a.id) as communication_count
+      (SELECT COUNT(*) FROM application_communications WHERE application_id = a.id) as communication_count,
+      (SELECT MAX(changed_at) FROM application_status_changes WHERE application_id = a.id) as last_status_change_at
     FROM applications a
     JOIN jobs j ON a.job_id = j.id
   `;
@@ -121,6 +122,15 @@ applications.patch('/:id', async (c) => {
   const params: (string | null)[] = [];
 
   if (body.status) {
+    // Record status change history if the status is actually changing
+    const current = await c.env.DB.prepare('SELECT status FROM applications WHERE id = ?')
+      .bind(id).first<{ status: string }>();
+    if (current && current.status !== body.status) {
+      await c.env.DB.prepare(
+        `INSERT INTO application_status_changes (application_id, from_status, to_status)
+         VALUES (?, ?, ?)`
+      ).bind(id, current.status, body.status).run();
+    }
     updates.push('status = ?');
     params.push(body.status);
     if (body.status === 'applied' && !body.applied_at) {
@@ -148,6 +158,17 @@ applications.delete('/:id', async (c) => {
   const id = c.req.param('id');
   await c.env.DB.prepare('DELETE FROM applications WHERE id = ?').bind(id).run();
   return c.json({ success: true });
+});
+
+// Status change history for an application (most recent first)
+applications.get('/:id/status-history', async (c) => {
+  const id = c.req.param('id');
+  const rows = await c.env.DB.prepare(
+    `SELECT * FROM application_status_changes
+     WHERE application_id = ?
+     ORDER BY changed_at DESC`
+  ).bind(id).all();
+  return c.json({ changes: rows.results });
 });
 
 // Generate cover letter for an application and save it

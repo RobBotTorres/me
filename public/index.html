@@ -468,6 +468,12 @@ async function loadApplications() {
       a.cover_letter ? `<span class="pill bg-orange-100 text-orange-800" title="Has cover letter">✉️</span>` : '',
     ].filter(Boolean).join(' ');
 
+    const addedDate = formatShortDate(a.created_at);
+    const lastChange = a.last_status_change_at ? formatShortDate(a.last_status_change_at) : null;
+    const dateLine = lastChange
+      ? `Added ${addedDate} · ${esc(a.status)} ${lastChange}`
+      : `Added ${addedDate}`;
+
     return `
     <div class="card p-4 ${terminal ? 'terminal-status' : ''}" id="app-card-${a.id}" data-app-id="${a.id}">
       <div class="flex items-center justify-between gap-3">
@@ -475,6 +481,7 @@ async function loadApplications() {
         <div class="flex-1 min-w-0 cursor-pointer hover:bg-gray-50 -m-2 p-2 rounded" onclick="viewJob(${a.job_id})">
           <h3 class="font-semibold text-sm">${esc(a.job_title)}</h3>
           <p class="text-xs text-gray-500">${esc(a.company)} · ${esc(a.location || 'N/A')}</p>
+          <p class="text-xs text-gray-400 mt-0.5">${dateLine}</p>
           ${pills ? `<div class="flex flex-wrap gap-1 mt-1">${pills}</div>` : ''}
         </div>
         <div class="flex items-center gap-2 shrink-0" onclick="event.stopPropagation()">
@@ -528,14 +535,16 @@ async function toggleManage(appId) {
 }
 
 async function renderManage(appId) {
-  const [cData, mData, appData] = await Promise.all([
+  const [cData, mData, appData, sData] = await Promise.all([
     api(`/applications/${appId}/contacts`),
     api(`/applications/${appId}/communications`),
     api(`/applications/${appId}`),
+    api(`/applications/${appId}/status-history`),
   ]);
   const contacts = cData.contacts || [];
   const comms = mData.communications || [];
   const app = appData.application || {};
+  const statusChanges = sData.changes || [];
 
   const el = document.getElementById('manage-' + appId);
   if (!el) return;
@@ -576,7 +585,27 @@ async function renderManage(appId) {
 
   const contactOptions = contacts.map(c => `<option value="${c.id}">${esc(c.name)}${c.role ? ` (${esc(c.role)})` : ''}</option>`).join('');
 
+  const historyItems = statusChanges.length
+    ? statusChanges.map(h => {
+        const when = new Date(h.changed_at.replace(' ', 'T') + 'Z').toLocaleString();
+        return `<div class="flex items-center gap-2 text-xs py-0.5">
+          <span class="text-gray-400">${esc(when)}</span>
+          <span>${statusBadge(h.from_status || 'new')}</span>
+          <span class="text-gray-400">→</span>
+          <span>${statusBadge(h.to_status)}</span>
+        </div>`;
+      }).join('')
+    : '<p class="text-xs text-gray-400 italic">No status changes yet.</p>';
+
   el.innerHTML = `
+    <section class="mb-4 p-3 bg-gray-50 border rounded">
+      <h4 class="text-sm font-semibold mb-2">Status History</h4>
+      <div class="text-xs text-gray-500 mb-2">
+        Added ${formatShortDate(app.created_at)} · Currently <strong>${esc(app.status)}</strong>
+      </div>
+      ${historyItems}
+    </section>
+
     <section class="mb-4 p-3 bg-gray-50 border rounded">
       <h4 class="text-sm font-semibold mb-2">Notes &amp; URL</h4>
       <div class="space-y-2">
@@ -1061,6 +1090,17 @@ async function deleteResume(id) {
 }
 
 function esc(s) { const d = document.createElement('div'); d.textContent = s == null ? '' : String(s); return d.innerHTML; }
+
+function formatShortDate(iso) {
+  if (!iso) return '';
+  const d = new Date(iso.replace(' ', 'T') + (iso.includes('Z') ? '' : 'Z'));
+  if (isNaN(d)) return iso;
+  const now = new Date();
+  const sameYear = d.getFullYear() === now.getFullYear();
+  return d.toLocaleDateString(undefined, sameYear
+    ? { month: 'short', day: 'numeric' }
+    : { month: 'short', day: 'numeric', year: 'numeric' });
+}
 
 loadDashboard();
 </script>
