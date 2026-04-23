@@ -3,8 +3,10 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>AI Job Search Agent</title>
+  <title>Job Search Agent</title>
+  <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='%233b82f6'%3E%3Cpath d='M20 6h-4V4c0-1.11-.89-2-2-2h-4c-1.11 0-2 .89-2 2v2H4c-1.11 0-1.99.89-1.99 2L2 19c0 1.11.89 2 2 2h16c1.11 0 2-.89 2-2V8c0-1.11-.89-2-2-2zm-6 0h-4V4h4v2z'/%3E%3C/svg%3E">
   <script src="https://cdn.tailwindcss.com"></script>
+  <script src="https://cdn.jsdelivr.net/npm/sortablejs@1.15.2/Sortable.min.js"></script>
   <style>
     .tab-active { border-bottom: 2px solid #3b82f6; color: #3b82f6; }
     .score-high { background: #d1fae5; color: #065f46; }
@@ -35,12 +37,22 @@
     .step-failed { color: #dc2626; }
     .progress-track { height: 6px; background: #e5e7eb; border-radius: 3px; overflow: hidden; }
     .progress-bar { height: 100%; background: linear-gradient(90deg,#3b82f6,#6366f1); transition: width 0.4s ease; }
+    .drag-handle { cursor: grab; color: #9ca3af; user-select: none; }
+    .drag-handle:hover { color: #6b7280; }
+    .drag-handle:active { cursor: grabbing; }
+    .sortable-ghost { opacity: 0.4; }
+    .sortable-chosen { box-shadow: 0 4px 12px rgba(0,0,0,0.15); }
+    .terminal-status { opacity: 0.6; }
+    .pill { display: inline-flex; align-items: center; gap: 2px; padding: 1px 6px; border-radius: 999px; font-size: 10px; font-weight: 500; }
   </style>
 </head>
 <body class="min-h-screen">
   <nav class="bg-white shadow-sm border-b">
     <div class="max-w-7xl mx-auto px-4 py-3 flex items-center justify-between">
-      <h1 class="text-xl font-bold text-gray-900">🎯 AI Job Search Agent</h1>
+      <h1 class="text-xl font-bold text-gray-900 flex items-center gap-2">
+        <svg viewBox="0 0 24 24" class="w-6 h-6 text-blue-600" fill="currentColor"><path d="M20 6h-4V4c0-1.11-.89-2-2-2h-4c-1.11 0-2 .89-2 2v2H4c-1.11 0-1.99.89-1.99 2L2 19c0 1.11.89 2 2 2h16c1.11 0 2-.89 2-2V8c0-1.11-.89-2-2-2zm-6 0h-4V4h4v2z"/></svg>
+        Job Search Agent
+      </h1>
       <div class="flex gap-6 text-sm font-medium">
         <button onclick="showTab('dashboard')" id="tab-dashboard" class="pb-1 tab-active">Dashboard</button>
         <button onclick="showTab('jobs')" id="tab-jobs" class="pb-1 text-gray-500 hover:text-gray-900">Jobs</button>
@@ -442,12 +454,28 @@ async function loadApplications() {
     el.innerHTML = '<p class="text-gray-400 text-sm">No applications yet.</p>';
     return;
   }
-  el.innerHTML = data.applications.map(a => `
-    <div class="card p-4" id="app-card-${a.id}">
+  el.innerHTML = data.applications.map(a => {
+    const terminal = a.status === 'rejected' || a.status === 'withdrawn';
+    const hasNotes = !!(a.notes && a.notes.trim());
+    const contactCount = a.contact_count || 0;
+    const commCount = a.communication_count || 0;
+    const hasAttention = (a.tailored_resume || a.cover_letter);
+    const pills = [
+      hasNotes ? `<span class="pill bg-gray-200 text-gray-700" title="Has notes">📝 notes</span>` : '',
+      contactCount > 0 ? `<span class="pill bg-indigo-100 text-indigo-800" title="${contactCount} contact(s)">👤 ${contactCount}</span>` : '',
+      commCount > 0 ? `<span class="pill bg-blue-100 text-blue-800" title="${commCount} communication(s)">💬 ${commCount}</span>` : '',
+      a.tailored_resume ? `<span class="pill bg-purple-100 text-purple-800" title="Has tailored resume">📄</span>` : '',
+      a.cover_letter ? `<span class="pill bg-orange-100 text-orange-800" title="Has cover letter">✉️</span>` : '',
+    ].filter(Boolean).join(' ');
+
+    return `
+    <div class="card p-4 ${terminal ? 'terminal-status' : ''}" id="app-card-${a.id}" data-app-id="${a.id}">
       <div class="flex items-center justify-between gap-3">
+        <span class="drag-handle text-lg" title="Drag to reorder">⋮⋮</span>
         <div class="flex-1 min-w-0 cursor-pointer hover:bg-gray-50 -m-2 p-2 rounded" onclick="viewJob(${a.job_id})">
           <h3 class="font-semibold text-sm">${esc(a.job_title)}</h3>
           <p class="text-xs text-gray-500">${esc(a.company)} · ${esc(a.location || 'N/A')}</p>
+          ${pills ? `<div class="flex flex-wrap gap-1 mt-1">${pills}</div>` : ''}
         </div>
         <div class="flex items-center gap-2 shrink-0" onclick="event.stopPropagation()">
           ${scoreBadge(a.match_score)}
@@ -466,7 +494,26 @@ async function loadApplications() {
       ${a.cover_letter ? `<details class="mt-2"><summary class="text-xs text-orange-700 cursor-pointer">View Cover Letter</summary><pre class="text-xs bg-gray-50 p-3 mt-2 rounded whitespace-pre-wrap font-sans">${esc(a.cover_letter)}</pre></details>` : ''}
       ${a.notes ? `<p class="text-xs text-gray-600 mt-2 whitespace-pre-wrap">${esc(a.notes)}</p>` : ''}
       <div id="manage-${a.id}" class="hidden mt-3 pt-3 border-t"></div>
-    </div>`).join('');
+    </div>`;
+  }).join('');
+
+  // Init drag-and-drop reordering (Sortable.js). Destroy any prior instance.
+  if (el._sortable) el._sortable.destroy();
+  el._sortable = new Sortable(el, {
+    animation: 150,
+    handle: '.drag-handle',
+    ghostClass: 'sortable-ghost',
+    chosenClass: 'sortable-chosen',
+    onEnd: async () => {
+      const ids = Array.from(el.children).map(c => parseInt(c.dataset.appId)).filter(n => !isNaN(n));
+      try {
+        await api('/applications/reorder', { method: 'POST', body: JSON.stringify({ ids }) });
+      } catch (e) {
+        alert('Could not save order: ' + e.message);
+        loadApplications();
+      }
+    },
+  });
 }
 
 async function updateAppStatus(id, status) { await api('/applications/' + id, { method: 'PATCH', body: JSON.stringify({ status }) }); }

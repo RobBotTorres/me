@@ -4,12 +4,16 @@ import { generateTailoredResume } from '../services/ai';
 
 const applications = new Hono<{ Bindings: Env }>();
 
-// List all applications with job details
+// List all applications with job details.
+// Sort: terminal statuses (rejected/withdrawn) bucketed to the bottom,
+// then by sort_order ASC (user-controlled), then by updated_at DESC as fallback.
 applications.get('/', async (c) => {
   const status = c.req.query('status');
 
   let query = `
-    SELECT a.*, j.title as job_title, j.company, j.location, j.url as job_url, j.match_score
+    SELECT a.*, j.title as job_title, j.company, j.location, j.url as job_url, j.match_score,
+      (SELECT COUNT(*) FROM application_contacts WHERE application_id = a.id) as contact_count,
+      (SELECT COUNT(*) FROM application_communications WHERE application_id = a.id) as communication_count
     FROM applications a
     JOIN jobs j ON a.job_id = j.id
   `;
@@ -20,7 +24,12 @@ applications.get('/', async (c) => {
     params.push(status);
   }
 
-  query += ' ORDER BY a.updated_at DESC';
+  query += `
+    ORDER BY
+      CASE WHEN a.status IN ('rejected', 'withdrawn') THEN 1 ELSE 0 END,
+      a.sort_order ASC,
+      a.updated_at DESC
+  `;
 
   const stmt = c.env.DB.prepare(query);
   const results = params.length > 0
@@ -28,6 +37,18 @@ applications.get('/', async (c) => {
     : await stmt.all();
 
   return c.json({ applications: results.results });
+});
+
+// Reorder applications - accepts array of IDs in new desired order
+applications.post('/reorder', async (c) => {
+  const body = await c.req.json<{ ids: number[] }>();
+  if (!Array.isArray(body.ids)) return c.json({ error: 'ids array required' }, 400);
+
+  const stmts = body.ids.map((id, index) =>
+    c.env.DB.prepare('UPDATE applications SET sort_order = ? WHERE id = ?').bind(index, id)
+  );
+  if (stmts.length > 0) await c.env.DB.batch(stmts);
+  return c.json({ success: true, reordered: stmts.length });
 });
 
 // Get single application

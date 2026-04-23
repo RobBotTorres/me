@@ -66,6 +66,7 @@ CREATE TABLE IF NOT EXISTS applications (
   custom_url TEXT,
   applied_at TEXT,
   interview_at TEXT,
+  sort_order INTEGER DEFAULT 0,
   created_at TEXT DEFAULT (datetime('now')),
   updated_at TEXT DEFAULT (datetime('now'))
 );

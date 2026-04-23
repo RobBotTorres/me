@@ -113,6 +113,7 @@ export interface Application {
   custom_url: string | null;
   applied_at: string | null;
   interview_at: string | null;
+  sort_order: number;
   created_at: string;
   updated_at: string;
 }
