@@ -58,6 +58,7 @@
         <button onclick="showTab('jobs')" id="tab-jobs" class="pb-1 text-gray-500 hover:text-gray-900">Jobs</button>
         <button onclick="showTab('applications')" id="tab-applications" class="pb-1 text-gray-500 hover:text-gray-900">Applications</button>
         <button onclick="showTab('resume')" id="tab-resume" class="pb-1 text-gray-500 hover:text-gray-900">Resume</button>
+        <button onclick="showTab('profile')" id="tab-profile" class="pb-1 text-gray-500 hover:text-gray-900">Profile</button>
       </div>
     </div>
   </nav>
@@ -207,6 +208,28 @@
       </div>
     </div>
 
+    <div id="view-profile" class="hidden fade-in">
+      <div class="card p-6">
+        <h2 class="text-lg font-semibold mb-2">Search Profile</h2>
+        <p class="text-sm text-gray-500 mb-3">
+          Paste your candidate context document here. This is the authoritative source for the search:
+          target titles, lane definitions, exclusions, voice rules, network, verified accomplishments. The pipeline
+          uses this as ground truth (not LLM-inferred) and applies it strictly to job ranking, tailored resumes,
+          and cover letters.
+        </p>
+        <p class="text-xs text-gray-400 mb-3">
+          Include sections like: WHO I AM · WHAT I'M LOOKING FOR · WHAT I'M NOT LOOKING FOR · LANE STRATEGY ·
+          HARD CONSTRAINTS · KEY ACCOMPLISHMENTS · NETWORK · VOICE RULES · RED/GREEN FLAGS.
+        </p>
+        <textarea id="profile-context" rows="22" placeholder="Paste your structured candidate context here..." class="w-full border border-gray-300 rounded-lg px-3 py-2 text-xs font-mono"></textarea>
+        <div class="flex items-center gap-3 mt-3">
+          <button onclick="saveProfile()" id="btn-save-profile" class="bg-green-600 text-white px-6 py-2 rounded-lg text-sm font-medium hover:bg-green-700 disabled:opacity-50">Save Profile</button>
+          <button onclick="clearProfile()" class="text-sm text-red-600 hover:underline">Clear</button>
+          <span id="profile-status" class="text-xs text-gray-500"></span>
+        </div>
+      </div>
+    </div>
+
     <div id="modal-overlay" class="fixed inset-0 bg-black bg-opacity-50 hidden z-50 items-center justify-center p-4" onclick="closeModal(event)">
       <div class="bg-white rounded-xl max-w-2xl w-full max-h-screen overflow-y-auto p-6" onclick="event.stopPropagation()">
         <div class="flex items-start justify-between mb-4">
@@ -235,6 +258,58 @@ function showTab(tab) {
   if (tab === 'jobs') { loadResumeFilter(); loadJobs(); }
   if (tab === 'applications') loadApplications();
   if (tab === 'resume') loadResumes();
+  if (tab === 'profile') loadProfile();
+}
+
+async function loadProfile() {
+  try {
+    const data = await api('/profile');
+    if (data.profile?.context) {
+      document.getElementById('profile-context').value = data.profile.context;
+      const updated = data.profile.updated_at ? formatShortDate(data.profile.updated_at) : '';
+      document.getElementById('profile-status').textContent = updated ? `Saved ${updated}` : '';
+    } else {
+      document.getElementById('profile-status').textContent = 'No profile yet — paste your context and save.';
+    }
+  } catch (e) {
+    document.getElementById('profile-status').textContent = 'Error loading: ' + e.message;
+  }
+}
+
+async function saveProfile() {
+  const context = document.getElementById('profile-context').value.trim();
+  if (!context) return alert('Profile context is empty.');
+  const btn = document.getElementById('btn-save-profile');
+  const status = document.getElementById('profile-status');
+  btn.disabled = true;
+  btn.textContent = 'Saving...';
+  try {
+    await api('/profile', { method: 'PUT', body: JSON.stringify({ context }) });
+    if (status) {
+      status.textContent = '✓ Saved. Will be used on next pipeline run.';
+      status.className = 'text-xs text-green-700';
+      setTimeout(() => { status.textContent = ''; status.className = 'text-xs text-gray-500'; }, 4000);
+    }
+  } catch (e) {
+    if (status) {
+      status.textContent = 'Error: ' + e.message;
+      status.className = 'text-xs text-red-600';
+    }
+  } finally {
+    btn.disabled = false;
+    btn.textContent = 'Save Profile';
+  }
+}
+
+async function clearProfile() {
+  if (!confirm('Clear the saved profile? The pipeline will fall back to LLM inference.')) return;
+  try {
+    await api('/profile', { method: 'DELETE' });
+    document.getElementById('profile-context').value = '';
+    document.getElementById('profile-status').textContent = 'Profile cleared.';
+  } catch (e) {
+    alert('Error: ' + e.message);
+  }
 }
 
 async function api(path, options = {}) {

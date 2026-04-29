@@ -103,11 +103,32 @@ Rules:
 - Where materials disagree, name it - don't average them
 - No corporate enthusiasm language`;
 
-export async function diagnoseResume(ai: Ai, resumeText: string): Promise<ResumeDiagnosis> {
+export async function diagnoseResume(
+  ai: Ai,
+  resumeText: string,
+  profileContext?: string
+): Promise<ResumeDiagnosis> {
+  // When profile context is present, treat its data as authoritative.
+  // Use its target_titles, lane definitions, exclusions verbatim.
+  const sysPrompt = profileContext
+    ? `${DIAGNOSE_SYSTEM}
+
+=== AUTHORITATIVE CANDIDATE PROFILE ===
+The candidate has provided a structured context document below. Treat its data as ground truth.
+- For "target_titles": use the candidate's explicit list verbatim. Do not invent new ones.
+- For "lanes": use the candidate's lane definitions (especially Lane 1 staffing, Lane 2 domain-relevant, Lane 3 aspirational warm-intro-only).
+- For "skills": prefer skills listed in the candidate's TECHNICAL STACK section.
+- Hard exclusions are non-negotiable - reflect them in the diagnosis.
+- Voice and tone for any text fields: direct, low-key, no corporate enthusiasm. No "passionate", "thrilled", "excited". No em dashes.
+
+CANDIDATE CONTEXT:
+${profileContext.slice(0, 12000)}`
+    : DIAGNOSE_SYSTEM;
+
   return runJson<ResumeDiagnosis>(
     ai,
-    DIAGNOSE_SYSTEM,
-    `MATERIALS (may include resume, portfolio, LinkedIn - call out contradictions):\n\n${resumeText.slice(0, 10000)}`,
+    sysPrompt,
+    `MATERIALS (resume, portfolio, LinkedIn — call out contradictions):\n\n${resumeText.slice(0, 10000)}`,
     3500
   );
 }
@@ -146,7 +167,8 @@ export async function rerankJobs(
   ai: Ai,
   diagnosis: ResumeDiagnosis,
   resumeText: string,
-  jobs: { title: string; company: string; description: string }[]
+  jobs: { title: string; company: string; description: string }[],
+  profileContext?: string
 ): Promise<JobRerankResultExt[]> {
   if (jobs.length === 0) return [];
 
@@ -161,9 +183,55 @@ export async function rerankJobs(
     .map((j, i) => `[${i}] ${j.title} @ ${j.company}\n${(j.description || '').slice(0, 800)}`)
     .join('\n\n---\n\n');
 
+  const sysPrompt = profileContext
+    ? `${RERANK_SYSTEM}
+
+=== AUTHORITATIVE CANDIDATE PROFILE ===
+Apply these rules strictly when scoring:
+
+HARD EXCLUSIONS (score 0, lane "stretch", reasoning="Excluded by candidate constraints: <reason>"):
+- Roles requiring relocation
+- 100% sales quota roles (BDR, AE, full-cycle sales)
+- Pure design roles
+- Junior IC roles where scope would be a step backward
+- Industries: defense, surveillance, gambling, predatory fintech, fossil fuel, MLM
+- Pure individual-contributor engineering roles
+- Pure people-management roles disconnected from the work
+
+LANE TAGGING (use the candidate's exact definitions):
+- fast_income: contract / staffing / agency placements (TEKsystems, Robert Half, Insight Global types). W2 contract, contract-to-hire, FTE placements via staffing.
+- lateral: domain-relevant where candidate's wine/CPG/DTC/e-commerce background is an asset. Includes Commerce7, WineDirect, Tock, Corksy, Shopify Plus partners, Klaviyo, Recharge, Yotpo, CPG, DTC brands with substantial e-commerce ops.
+- stretch: aspirational mission-driven tech (Anthropic, Figma, Mozilla, Stripe, Etsy, Patagonia, Dr. Bronner's). Score these only if there's a clear signal the role fits; warm-intro reality should be reflected in the reasoning.
+
+RED FLAGS (downgrade score by 15-25):
+- "Wear many hats" without commensurate scope/comp
+- Vague title with no leveling
+- "Rockstar"/"ninja" language
+- "Fast-paced" with no PTO floor mentioned
+- Visible recent layoffs or mass exits
+
+GREEN FLAGS (boost score by 10-20):
+- Mission alignment (AI access, creative economy tools, sustainability, ethical tech, open source, B-corp/worker-owned)
+- "Bridging business and technical" or "translating between teams"
+- Remote-first with documented async culture
+- Clear leveling and comp transparency
+- Customer-facing technical roles at infrastructure / dev tools companies
+- TPM / implementation roles at SaaS companies whose customers are DTC brands
+
+LOCATION HARD CONSTRAINT: Oakland, CA. Remote OR commutable Bay Area only. Anything requiring relocation = excluded.
+
+REASONING REQUIREMENTS:
+- Cite specific JD details, not generic praise
+- If excluded, name the exact reason
+- If lane=stretch and there's no obvious warm-intro path, note "warm-intro-gated" in reasoning
+
+CANDIDATE CONTEXT (for additional details):
+${profileContext.slice(0, 8000)}`
+    : RERANK_SYSTEM;
+
   const result = await runJson<{ results: JobRerankResultExt[] }>(
     ai,
-    RERANK_SYSTEM,
+    sysPrompt,
     `CANDIDATE DIAGNOSIS:
 ${JSON.stringify(diagSummary, null, 2)}
 
@@ -320,11 +388,26 @@ export async function generateTailoredResume(
   resumeText: string,
   jobTitle: string,
   company: string,
-  jobDescription: string
+  jobDescription: string,
+  profileContext?: string
 ): Promise<string> {
+  const sys = profileContext
+    ? `${TAILORED_RESUME_GUIDE}
+
+=== CANDIDATE-SPECIFIC RULES (override generic rules where they conflict) ===
+The candidate has provided voice/style rules and verified accomplishments. Treat these as authoritative.
+- Use ONLY accomplishments from the candidate's "KEY ACCOMPLISHMENTS" section if present in the context.
+- Voice: direct, low-key, no corporate enthusiasm. No "passionate", "thrilled", "excited to", "I'd love the chance to". No apologetic framing. No "I know this is a long shot". No hedging. No em dashes (use periods, commas, colons, parentheses). Short sentences when possible.
+- Output format: markdown (.md). Never PDF or DOCX.
+- Do not soften attribution. If "one of four leads", say "one of four leads", not "led".
+
+CANDIDATE CONTEXT:
+${profileContext.slice(0, 10000)}`
+    : TAILORED_RESUME_GUIDE;
+
   const response = await ai.run(TEXT_MODEL, {
     messages: [
-      { role: 'system', content: TAILORED_RESUME_GUIDE },
+      { role: 'system', content: sys },
       {
         role: 'user',
         content: `SOURCE RESUME (do not fabricate beyond this):
@@ -337,7 +420,7 @@ TARGET JOB: ${jobTitle} at ${company}
 JOB DESCRIPTION:
 ${jobDescription.slice(0, 3500)}
 
-Output the tailored plain-text resume now. No preamble.`,
+Output the tailored markdown resume now. No preamble.`,
       },
     ],
     max_tokens: 2500,
@@ -352,15 +435,23 @@ export async function generateCoverLetter(
   resumeText: string,
   jobTitle: string,
   company: string,
-  jobDescription: string
+  jobDescription: string,
+  profileContext?: string
 ): Promise<string> {
+  const baseRules = `Write a concise cover letter. Under 250 words. Direct tone. No corporate enthusiasm language ("passionate", "excited", "thrilled", "I'd love the chance to"). No apologetic framing. No "I know this is a long shot". No em dashes (use periods, commas, colons, parentheses). Short sentences. Plainly confident, not boastful, not self-deprecating. Only claim facts present in the resume. Cite specific JD details, not generic praise.`;
+
+  const sys = profileContext
+    ? `${baseRules}
+
+=== CANDIDATE CONTEXT (authoritative) ===
+Use ONLY accomplishments from the candidate's "KEY ACCOMPLISHMENTS" section. Do not soften attribution (if "one of four leads", say so). Output should sound like the candidate's voice as described in their context document.
+
+${profileContext.slice(0, 8000)}`
+    : baseRules;
+
   const response = await ai.run(TEXT_MODEL, {
     messages: [
-      {
-        role: 'system',
-        content:
-          'Write a concise cover letter. Under 250 words. Direct tone. No corporate enthusiasm language ("passionate", "excited", "thrilled"). Only claim facts present in the resume. Specific references to the job description.',
-      },
+      { role: 'system', content: sys },
       {
         role: 'user',
         content: `RESUME:\n${resumeText}\n\nJOB: ${jobTitle} at ${company}\n\nDESCRIPTION:\n${jobDescription.slice(0, 2500)}`,

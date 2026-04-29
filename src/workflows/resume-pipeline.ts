@@ -97,6 +97,11 @@ export class ResumePipeline extends WorkflowEntrypoint<Env, ResumePipelineParams
       return row;
     });
 
+    // Load candidate profile (singleton, optional). Drives target_titles, lanes, exclusions.
+    const profileRow = await db.prepare('SELECT context FROM candidate_profile WHERE id = 1')
+      .first<{ context: string }>();
+    const profileContext = profileRow?.context || undefined;
+
     // ---- Step 1: Diagnose ----
     const diagnoseResult = await step.do(
       'diagnose',
@@ -105,7 +110,7 @@ export class ResumePipeline extends WorkflowEntrypoint<Env, ResumePipelineParams
         await emitEvent(db, resumeId, 'diagnose', 'running');
         try {
           const [diagnosis, embedding] = await Promise.all([
-            diagnoseResume(this.env.AI, resume.raw_text),
+            diagnoseResume(this.env.AI, resume.raw_text, profileContext),
             getEmbedding(this.env.AI, resume.raw_text),
           ]);
           await db.prepare(`
@@ -269,7 +274,8 @@ export class ResumePipeline extends WorkflowEntrypoint<Env, ResumePipelineParams
               this.env.AI, diagnosis, resume.raw_text,
               batch.map((x) => ({
                 title: x.job.title, company: x.job.company, description: x.job.description,
-              }))
+              })),
+              profileContext
             );
             for (const r of results) {
               const src = batch[r.job_index];

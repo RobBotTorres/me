@@ -1,3 +1,9 @@
+CREATE TABLE IF NOT EXISTS candidate_profile (
+  id INTEGER PRIMARY KEY CHECK (id = 1),
+  context TEXT NOT NULL,
+  updated_at TEXT DEFAULT (datetime('now'))
+);
+
 CREATE TABLE IF NOT EXISTS resumes (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   name TEXT NOT NULL,

@@ -194,12 +194,15 @@ applications.post('/:id/cover-letter', async (c) => {
   if (!resume) return c.json({ error: 'Resume not found' }, 404);
 
   const { generateCoverLetter } = await import('../services/ai');
+  const profileRow = await c.env.DB.prepare('SELECT context FROM candidate_profile WHERE id = 1')
+    .first<{ context: string }>();
   const coverLetter = await generateCoverLetter(
     c.env.AI,
     resume.raw_text,
     app.job_title,
     app.company,
-    app.job_description || ''
+    app.job_description || '',
+    profileRow?.context
   );
 
   await c.env.DB.prepare(
@@ -231,12 +234,15 @@ applications.post('/:id/tailor-resume', async (c) => {
     .bind(resumeId).first<Resume>();
   if (!resume) return c.json({ error: 'Resume not found' }, 404);
 
+  const profileRow2 = await c.env.DB.prepare('SELECT context FROM candidate_profile WHERE id = 1')
+    .first<{ context: string }>();
   const tailored = await generateTailoredResume(
     c.env.AI,
     resume.raw_text,
     app.job_title,
     app.company,
-    app.job_description || ''
+    app.job_description || '',
+    profileRow2?.context
   );
 
   await c.env.DB.prepare(

@@ -5,6 +5,7 @@ import jobRoutes from './routes/jobs';
 import resumeRoutes from './routes/resumes';
 import applicationRoutes from './routes/applications';
 import searchRoutes from './routes/search';
+import profileRoutes from './routes/profile';
 
 export { ResumePipeline } from './workflows/resume-pipeline';
 
@@ -37,18 +38,20 @@ app.post('/api/internal/rerank', async (c) => {
     resumeText: string;
     jobs: { title: string; company: string; description: string }[];
     batchSize?: number;
+    profileContext?: string;
   }>();
   const batchSize = body.batchSize || 15;
   const results: import('./services/ai').JobRerankResultExt[] = [];
   for (let i = 0; i < body.jobs.length; i += batchSize) {
     const batch = body.jobs.slice(i, i + batchSize);
     try {
-      const rankResults = await rerankJobs(c.env.AI, body.diagnosis, body.resumeText, batch);
-      // Remap indices to global positions
+      const rankResults = await rerankJobs(
+        c.env.AI, body.diagnosis, body.resumeText, batch, body.profileContext
+      );
       for (const r of rankResults) {
         results.push({ ...r, job_index: i + r.job_index });
       }
-    } catch (err) {
+    } catch {
       // Skip failed batch
     }
   }
@@ -205,6 +208,7 @@ app.route('/api/jobs', jobRoutes);
 app.route('/api/resumes', resumeRoutes);
 app.route('/api/applications', applicationRoutes);
 app.route('/api/search', searchRoutes);
+app.route('/api/profile', profileRoutes);
 
 export default {
   fetch: app.fetch,
