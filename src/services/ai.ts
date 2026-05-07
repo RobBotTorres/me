@@ -9,6 +9,26 @@ import {
 const TEXT_MODEL = '@cf/moonshotai/kimi-k2.6' as const;
 const EMBEDDING_MODEL = '@cf/baai/bge-base-en-v1.5' as const;
 
+// Extract text from Workers AI response. Different models return different shapes:
+// - Llama: { response: "..." }
+// - Kimi/OpenAI-style: { choices: [{ message: { content: "..." } }] }
+// - Some: { content: "..." } or { text: "..." }
+function extractText(response: unknown): string {
+  if (!response) return '';
+  if (typeof response === 'string') return response;
+  const r = response as Record<string, unknown>;
+  if (typeof r.response === 'string') return r.response;
+  if (typeof r.content === 'string') return r.content;
+  if (typeof r.text === 'string') return r.text;
+  if (Array.isArray(r.choices) && r.choices.length > 0) {
+    const msg = (r.choices[0] as { message?: { content?: string }; text?: string }).message;
+    if (msg?.content) return msg.content;
+    const fallback = (r.choices[0] as { text?: string }).text;
+    if (fallback) return fallback;
+  }
+  return '';
+}
+
 async function runJson<T>(ai: Ai, system: string, user: string, maxTokens = 3500): Promise<T> {
   const response = await ai.run(TEXT_MODEL, {
     messages: [
@@ -19,9 +39,12 @@ async function runJson<T>(ai: Ai, system: string, user: string, maxTokens = 3500
     response_format: { type: 'json_object' },
   } as Parameters<Ai['run']>[1]);
 
-  const text = (response as { response: string }).response;
+  const text = extractText(response);
+  if (!text) {
+    throw new Error(`Empty response from model. Raw: ${JSON.stringify(response).slice(0, 500)}`);
+  }
   const jsonMatch = text.match(/\{[\s\S]*\}/);
-  if (!jsonMatch) throw new Error('No JSON in model response');
+  if (!jsonMatch) throw new Error(`No JSON in model response. Got: ${text.slice(0, 300)}`);
   return JSON.parse(jsonMatch[0]) as T;
 }
 
@@ -425,7 +448,7 @@ Output the tailored markdown resume now. No preamble.`,
     ],
     max_tokens: 2500,
   });
-  return (response as { response: string }).response.trim();
+  return extractText(response).trim();
 }
 
 // --- Cover Letter (kept from v1) ---
@@ -459,7 +482,7 @@ ${profileContext.slice(0, 8000)}`
     ],
     max_tokens: 800,
   });
-  return (response as { response: string }).response.trim();
+  return extractText(response).trim();
 }
 
 // --- Embeddings ---
@@ -505,7 +528,8 @@ export async function extractJobSkills(ai: Ai, jobDescription: string): Promise<
       max_tokens: 400,
       response_format: { type: 'json_object' },
     } as Parameters<Ai['run']>[1]);
-    const text = (response as { response: string }).response;
+    const text = extractText(response);
+    if (!text) return [];
     const m = text.match(/\{[\s\S]*\}/);
     if (!m) return [];
     const parsed = JSON.parse(m[0]) as { skills?: string[] };
