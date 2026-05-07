@@ -6,7 +6,9 @@ import {
 } from '../types';
 
 // Workers AI models
-const TEXT_MODEL = '@cf/moonshotai/kimi-k2.6' as const;
+// Kimi K2.6 is a reasoning model - uses tokens for chain-of-thought, eats budget.
+// Llama 3.3 70B is direct-output, fits our structured-JSON workload better.
+const TEXT_MODEL = '@cf/meta/llama-3.3-70b-instruct-fp8-fast' as const;
 const EMBEDDING_MODEL = '@cf/baai/bge-base-en-v1.5' as const;
 
 // Extract text from Workers AI response. Different models return different shapes:
