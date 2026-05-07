@@ -6,6 +6,7 @@ import resumeRoutes from './routes/resumes';
 import applicationRoutes from './routes/applications';
 import searchRoutes from './routes/search';
 import profileRoutes from './routes/profile';
+import watchedRoutes from './routes/watched';
 
 export { ResumePipeline } from './workflows/resume-pipeline';
 
@@ -209,6 +210,7 @@ app.route('/api/resumes', resumeRoutes);
 app.route('/api/applications', applicationRoutes);
 app.route('/api/search', searchRoutes);
 app.route('/api/profile', profileRoutes);
+app.route('/api/watched', watchedRoutes);
 
 export default {
   fetch: app.fetch,

@@ -11,7 +11,7 @@ import {
   getEmbeddingsBatch,
   cosineSimilarity,
 } from '../services/ai';
-import { searchJobs } from '../services/jobs';
+import { searchJobs, fetchWatchedCompanyJobs } from '../services/jobs';
 
 export type ResumePipelineParams = { resumeId: number };
 
@@ -178,14 +178,35 @@ export class ResumePipeline extends WorkflowEntrypoint<Env, ResumePipelineParams
       perQueryResults.push(result);
     }
 
+    // Pull jobs from watched companies (direct ATS feeds).
+    // These hit specific careers pages (Greenhouse / Lever / Ashby) — high signal
+    // for Lane 3 stretch targets. Each company = one fetch.
+    const watchedJobs = await step.do(
+      'fetch-watched-companies',
+      { retries: { limit: 1, delay: '5 seconds' }, timeout: '2 minutes' },
+      async () => {
+        const watched = await db.prepare(
+          'SELECT slug, ats, label FROM watched_companies'
+        ).all<{ slug: string; ats: string; label: string | null }>();
+        const list = watched.results || [];
+        if (list.length === 0) return [] as ExternalJob[];
+        const fetched = await Promise.all(
+          list.map((w) => fetchWatchedCompanyJobs(w.ats, w.slug, w.label || w.slug))
+        );
+        return fetched.flat();
+      }
+    );
+    if (watchedJobs.length > 0) perQueryResults.push(watchedJobs);
+
     // Aggregate search results
     const allJobs = await step.do('post-search-aggregate', async () => {
       const flat = perQueryResults.flat();
       const deduped = dedupeJobs(flat).slice(0, JOBS_PER_QUERY * queries.length);
       const bySource: Record<string, number> = {
         remotive: 0, arbeitnow: 0, remoteok: 0, themuse: 0, usajobs: 0,
-        workingnomads: 0, jobicy: 0, hackernews: 0, adzuna: 0, jsearch: 0,
-        jooble: 0, findwork: 0,
+        workingnomads: 0, jobicy: 0, hackernews: 0, weworkremotely: 0,
+        adzuna: 0, jsearch: 0, jooble: 0, findwork: 0,
+        greenhouse: 0, lever: 0, ashby: 0,
       };
       for (const j of flat) bySource[j.source] = (bySource[j.source] || 0) + 1;
       const breakdown = Object.entries(bySource)

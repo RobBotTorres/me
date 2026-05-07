@@ -1,3 +1,12 @@
+CREATE TABLE IF NOT EXISTS watched_companies (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  slug TEXT NOT NULL,
+  ats TEXT NOT NULL,
+  label TEXT,
+  created_at TEXT DEFAULT (datetime('now'))
+);
+CREATE UNIQUE INDEX IF NOT EXISTS uniq_watched_slug_ats ON watched_companies(slug, ats);
+
 CREATE TABLE IF NOT EXISTS candidate_profile (
   id INTEGER PRIMARY KEY CHECK (id = 1),
   context TEXT NOT NULL,

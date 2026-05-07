@@ -209,6 +209,34 @@
     </div>
 
     <div id="view-profile" class="hidden fade-in">
+      <div class="card p-6 mb-6">
+        <h2 class="text-lg font-semibold mb-2">Watched Companies</h2>
+        <p class="text-sm text-gray-500 mb-3">
+          Direct careers-page polling. The pipeline hits each company's ATS feed (Greenhouse, Lever, or Ashby)
+          on every run and pulls all open roles. Best for Lane 3 (aspirational) targets and specific Lane 2
+          companies you're tracking.
+        </p>
+        <p class="text-xs text-gray-400 mb-3">
+          Find the slug from the company's careers URL. Examples:
+          <code class="bg-gray-100 px-1">boards.greenhouse.io/<b>anthropic</b></code>,
+          <code class="bg-gray-100 px-1">jobs.lever.co/<b>figma</b></code>,
+          <code class="bg-gray-100 px-1">jobs.ashbyhq.com/<b>linear</b></code>
+        </p>
+        <div class="flex flex-wrap gap-2 items-end mb-3">
+          <input id="wc-slug" placeholder="company-slug" class="border border-gray-300 rounded px-2 py-1.5 text-sm">
+          <select id="wc-ats" class="border border-gray-300 rounded px-2 py-1.5 text-sm">
+            <option value="greenhouse">Greenhouse</option>
+            <option value="lever">Lever</option>
+            <option value="ashby">Ashby</option>
+          </select>
+          <input id="wc-label" placeholder="Display name (optional)" class="border border-gray-300 rounded px-2 py-1.5 text-sm">
+          <button onclick="testWatched()" id="btn-wc-test" class="bg-gray-600 text-white px-3 py-1.5 rounded text-sm hover:bg-gray-700">Test</button>
+          <button onclick="addWatched()" id="btn-wc-add" class="bg-green-600 text-white px-3 py-1.5 rounded text-sm hover:bg-green-700">+ Add</button>
+        </div>
+        <div id="wc-test-result" class="text-xs text-gray-600 mb-3"></div>
+        <div id="wc-list" class="space-y-1"></div>
+      </div>
+
       <div class="card p-6">
         <h2 class="text-lg font-semibold mb-2">Search Profile</h2>
         <p class="text-sm text-gray-500 mb-3">
@@ -274,6 +302,77 @@ async function loadProfile() {
   } catch (e) {
     document.getElementById('profile-status').textContent = 'Error loading: ' + e.message;
   }
+  loadWatchedList();
+}
+
+async function loadWatchedList() {
+  try {
+    const data = await api('/watched');
+    const el = document.getElementById('wc-list');
+    const list = data.companies || [];
+    if (!list.length) {
+      el.innerHTML = '<p class="text-xs text-gray-400 italic">No companies watched yet.</p>';
+      return;
+    }
+    el.innerHTML = list.map(c => `
+      <div class="flex items-center justify-between text-sm border rounded px-2 py-1 bg-white">
+        <div>
+          <span class="font-medium">${esc(c.label || c.slug)}</span>
+          <span class="text-gray-400 ml-2 text-xs">${esc(c.ats)} · ${esc(c.slug)}</span>
+        </div>
+        <button onclick="removeWatched(${c.id})" class="text-red-500 hover:text-red-700 text-xs">✕</button>
+      </div>
+    `).join('');
+  } catch (e) {
+    document.getElementById('wc-list').textContent = 'Error: ' + e.message;
+  }
+}
+
+async function testWatched() {
+  const slug = document.getElementById('wc-slug').value.trim();
+  const ats = document.getElementById('wc-ats').value;
+  const label = document.getElementById('wc-label').value.trim() || undefined;
+  if (!slug) return alert('Enter a slug');
+  const out = document.getElementById('wc-test-result');
+  const btn = document.getElementById('btn-wc-test');
+  btn.disabled = true; btn.textContent = 'Testing...';
+  try {
+    const data = await api('/watched/test', { method: 'POST', body: JSON.stringify({ slug, ats, label }) });
+    if (data.count === 0) {
+      out.className = 'text-xs text-red-600 mb-3';
+      out.textContent = `✗ Got 0 jobs — check the slug. URL fetched: ${ats === 'greenhouse' ? `boards-api.greenhouse.io/v1/boards/${slug}/jobs` : ats === 'lever' ? `api.lever.co/v0/postings/${slug}` : `api.ashbyhq.com/posting-api/job-board/${slug}`}`;
+    } else {
+      out.className = 'text-xs text-green-700 mb-3';
+      out.textContent = `✓ Found ${data.count} jobs. Sample: ${data.sample.map(s => `"${s.title}" (${s.location})`).join(' · ')}`;
+    }
+  } catch (e) {
+    out.className = 'text-xs text-red-600 mb-3';
+    out.textContent = '✗ Error: ' + e.message;
+  } finally {
+    btn.disabled = false; btn.textContent = 'Test';
+  }
+}
+
+async function addWatched() {
+  const slug = document.getElementById('wc-slug').value.trim();
+  const ats = document.getElementById('wc-ats').value;
+  const label = document.getElementById('wc-label').value.trim() || undefined;
+  if (!slug) return alert('Enter a slug');
+  try {
+    await api('/watched', { method: 'POST', body: JSON.stringify({ slug, ats, label }) });
+    document.getElementById('wc-slug').value = '';
+    document.getElementById('wc-label').value = '';
+    document.getElementById('wc-test-result').textContent = '';
+    loadWatchedList();
+  } catch (e) {
+    alert('Error: ' + e.message);
+  }
+}
+
+async function removeWatched(id) {
+  if (!confirm('Remove this company from watched list?')) return;
+  await api('/watched/' + id, { method: 'DELETE' });
+  loadWatchedList();
 }
 
 async function saveProfile() {

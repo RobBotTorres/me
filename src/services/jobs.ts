@@ -408,6 +408,152 @@ async function searchJSearch(query: string, location: string, apiKey?: string): 
   } catch { return []; }
 }
 
+// --- WeWorkRemotely RSS (free, no auth) ---
+export async function searchWeWorkRemotely(query: string): Promise<ExternalJob[]> {
+  try {
+    const res = await fetch('https://weworkremotely.com/remote-jobs.rss');
+    if (!res.ok) return [];
+    const xml = await res.text();
+    // RSS items: <item><title>...</title><description>...</description><pubDate>...</pubDate><link>...</link><guid>...</guid></item>
+    const items = xml.split('<item>').slice(1);
+    const q = query.toLowerCase();
+    const jobs: ExternalJob[] = [];
+    for (const item of items) {
+      const title = (item.match(/<title>(?:<!\[CDATA\[)?([\s\S]*?)(?:\]\]>)?<\/title>/) || [])[1] || '';
+      const description = (item.match(/<description>(?:<!\[CDATA\[)?([\s\S]*?)(?:\]\]>)?<\/description>/) || [])[1] || '';
+      const link = (item.match(/<link>([\s\S]*?)<\/link>/) || [])[1] || '';
+      const pubDate = (item.match(/<pubDate>([\s\S]*?)<\/pubDate>/) || [])[1] || '';
+      const guid = (item.match(/<guid[^>]*>([\s\S]*?)<\/guid>/) || [])[1] || link;
+      const hay = `${title} ${description}`.toLowerCase();
+      if (!hay.includes(q)) continue;
+      // Title format is usually "Company: Role Title"
+      const parts = title.split(':').map((s) => s.trim());
+      const company = parts.length > 1 ? parts[0] : 'Unknown';
+      const jobTitle = parts.length > 1 ? parts.slice(1).join(': ') : title;
+      jobs.push({
+        title: jobTitle,
+        company,
+        location: 'Remote',
+        description: stripHtml(description),
+        url: link,
+        remote: true,
+        source: 'weworkremotely',
+        external_id: `wwr-${guid}`,
+        posted_at: pubDate ? new Date(pubDate).toISOString() : undefined,
+      });
+      if (jobs.length >= 40) break;
+    }
+    return jobs;
+  } catch { return []; }
+}
+
+// --- Greenhouse public board (free, no auth) ---
+export async function fetchGreenhouseJobs(slug: string, label?: string): Promise<ExternalJob[]> {
+  try {
+    const res = await fetch(`https://boards-api.greenhouse.io/v1/boards/${encodeURIComponent(slug)}/jobs?content=true`);
+    if (!res.ok) return [];
+    const data = (await res.json()) as {
+      jobs: Array<{
+        id: number;
+        title: string;
+        absolute_url: string;
+        content?: string;
+        location: { name: string };
+        updated_at: string;
+        departments?: Array<{ name: string }>;
+        offices?: Array<{ name: string; location?: string }>;
+      }>;
+    };
+    return (data.jobs || []).slice(0, 50).map((j) => ({
+      title: j.title,
+      company: label || slug,
+      location: j.location?.name || (j.offices?.[0]?.name) || 'Not specified',
+      description: stripHtml(j.content || ''),
+      url: j.absolute_url,
+      remote: /remote/i.test(j.location?.name || '') || j.offices?.some((o) => /remote/i.test(o.name || '')) || false,
+      source: 'greenhouse',
+      external_id: `gh-${slug}-${j.id}`,
+      posted_at: j.updated_at,
+    }));
+  } catch { return []; }
+}
+
+// --- Lever public board (free, no auth) ---
+export async function fetchLeverJobs(slug: string, label?: string): Promise<ExternalJob[]> {
+  try {
+    const res = await fetch(`https://api.lever.co/v0/postings/${encodeURIComponent(slug)}?mode=json`);
+    if (!res.ok) return [];
+    const data = (await res.json()) as Array<{
+      id: string;
+      text: string;
+      hostedUrl: string;
+      descriptionPlain?: string;
+      description?: string;
+      categories?: { commitment?: string; department?: string; location?: string; team?: string; allLocations?: string[] };
+      createdAt?: number;
+      workplaceType?: string;
+    }>;
+    return (data || []).slice(0, 50).map((j) => ({
+      title: j.text,
+      company: label || slug,
+      location: j.categories?.location || (j.categories?.allLocations || []).join(', ') || 'Not specified',
+      description: j.descriptionPlain || stripHtml(j.description || ''),
+      url: j.hostedUrl,
+      remote: j.workplaceType === 'remote' || /remote/i.test(j.categories?.location || ''),
+      job_type: (j.categories?.commitment || 'full-time').toLowerCase(),
+      source: 'lever',
+      external_id: `lever-${slug}-${j.id}`,
+      posted_at: j.createdAt ? new Date(j.createdAt).toISOString() : undefined,
+    }));
+  } catch { return []; }
+}
+
+// --- Ashby public board (free, no auth) ---
+export async function fetchAshbyJobs(slug: string, label?: string): Promise<ExternalJob[]> {
+  try {
+    const res = await fetch(`https://api.ashbyhq.com/posting-api/job-board/${encodeURIComponent(slug)}?includeCompensation=true`);
+    if (!res.ok) return [];
+    const data = (await res.json()) as {
+      jobs?: Array<{
+        id: string;
+        title: string;
+        location?: string;
+        secondaryLocations?: Array<{ location: string }>;
+        employmentType?: string;
+        descriptionHtml?: string;
+        descriptionPlain?: string;
+        jobUrl?: string;
+        publishedAt?: string;
+        isRemote?: boolean;
+        compensation?: { compensationTierSummary?: string };
+      }>;
+    };
+    return (data.jobs || []).slice(0, 50).map((j) => ({
+      title: j.title,
+      company: label || slug,
+      location: j.location || j.secondaryLocations?.[0]?.location || 'Not specified',
+      description: j.descriptionPlain || stripHtml(j.descriptionHtml || ''),
+      url: j.jobUrl || `https://jobs.ashbyhq.com/${slug}/${j.id}`,
+      remote: j.isRemote || /remote/i.test(j.location || ''),
+      job_type: (j.employmentType || 'full-time').toLowerCase(),
+      source: 'ashby',
+      external_id: `ashby-${slug}-${j.id}`,
+      posted_at: j.publishedAt,
+    }));
+  } catch { return []; }
+}
+
+export async function fetchWatchedCompanyJobs(
+  ats: string,
+  slug: string,
+  label?: string
+): Promise<ExternalJob[]> {
+  if (ats === 'greenhouse') return fetchGreenhouseJobs(slug, label);
+  if (ats === 'lever') return fetchLeverJobs(slug, label);
+  if (ats === 'ashby') return fetchAshbyJobs(slug, label);
+  return [];
+}
+
 // --- Aggregated search ---
 export interface SearchOptions {
   query: string;
@@ -495,6 +641,7 @@ export async function searchJobs(options: SearchOptions): Promise<ExternalJob[]>
     searchWorkingNomads(query),
     searchJobicy(query),
     searchHackerNews(query),
+    searchWeWorkRemotely(query),
     searchAdzuna(query, locForAPI, adzunaAppId, adzunaAppKey),
     searchJSearch(query, locForAPI, rapidApiKey),
     searchJooble(query, locForAPI, joobleApiKey),
