@@ -6,7 +6,7 @@ import {
 } from '../types';
 
 // Workers AI models
-const TEXT_MODEL = '@cf/meta/llama-3.3-70b-instruct-fp8-fast' as const;
+const TEXT_MODEL = '@cf/moonshotai/kimi-k2.6' as const;
 const EMBEDDING_MODEL = '@cf/baai/bge-base-en-v1.5' as const;
 
 async function runJson<T>(ai: Ai, system: string, user: string, maxTokens = 3500): Promise<T> {
