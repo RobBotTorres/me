@@ -345,7 +345,7 @@ export class ResumePipeline extends WorkflowEntrypoint<Env, ResumePipelineParams
     // ---- Step 5: Save ----
     await step.do(
       'save',
-      { retries: { limit: 3, delay: '2 seconds' }, timeout: '1 minute' },
+      { retries: { limit: 2, delay: '5 seconds' }, timeout: '3 minutes' },
       async () => {
         await emitEvent(db, resumeId, 'save', 'running');
 
@@ -371,8 +371,10 @@ export class ResumePipeline extends WorkflowEntrypoint<Env, ResumePipelineParams
           }
         }
 
+        // Build statements; truncate description to keep payload manageable
         const stmts: D1PreparedStatement[] = [];
         for (const r of rankedJobs) {
+          const truncatedDesc = (r.job.description || '').slice(0, 3000);
           const existingId = r.job.external_id ? existingMap.get(r.job.external_id) : undefined;
           if (existingId) {
             stmts.push(
@@ -395,13 +397,13 @@ export class ResumePipeline extends WorkflowEntrypoint<Env, ResumePipelineParams
                 r.job.external_id || null,
                 r.job.title, r.job.company,
                 r.job.location || null,
-                r.job.description, r.job.url,
+                truncatedDesc, r.job.url,
                 r.job.salary_min ?? null, r.job.salary_max ?? null,
                 r.job.job_type || 'full-time',
                 r.job.remote ? 1 : 0,
                 r.job.source,
                 JSON.stringify(r.skills),
-                null, // embedding not stored (too large to pass through workflow; can re-compute)
+                null,
                 r.score, r.reasoning, r.semantic, r.lane,
                 resumeId,
                 r.job.posted_at || null
@@ -409,7 +411,13 @@ export class ResumePipeline extends WorkflowEntrypoint<Env, ResumePipelineParams
             );
           }
         }
-        if (stmts.length > 0) await db.batch(stmts);
+
+        // Chunk batches to avoid D1 payload/timeout issues with many statements
+        const BATCH_SIZE = 30;
+        for (let i = 0; i < stmts.length; i += BATCH_SIZE) {
+          const slice = stmts.slice(i, i + BATCH_SIZE);
+          await db.batch(slice);
+        }
 
         await emitEvent(db, resumeId, 'save', 'completed', {
           current: stmts.length, total: stmts.length,
