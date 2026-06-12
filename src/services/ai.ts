@@ -3,6 +3,7 @@ import {
   JobRerankResult,
   JobLane,
   ExternalJob,
+  ParsedProfile,
 } from '../types';
 
 // Workers AI models
@@ -539,6 +540,84 @@ export async function extractJobSkills(ai: Ai, jobDescription: string): Promise<
   } catch {
     return [];
   }
+}
+
+// --- Profile extraction (runs ONCE at profile-save time) ---
+// Pulls structured data out of the freeform context doc so the pipeline can
+// use it deterministically instead of re-deriving it via LLM on every run.
+
+const EXTRACT_PROFILE_SYSTEM = `Extract structured data from a candidate's job-search context document. Copy values VERBATIM from the document - do not paraphrase, invent, or omit listed items.
+
+Output STRICT JSON:
+{
+  "target_titles": ["every job title from the candidate's target/role-types list, in their stated order, verbatim"],
+  "role_thesis": "the sentence(s) where they describe what ties their target roles together / what kind of work they want",
+  "network_contacts": [{"name": "first name or full name", "company": "company they work at or are associated with", "notes": "relationship in a few words"}],
+  "watched_company_hints": ["every specific company NAME mentioned as a target, interest, or lane example"],
+  "location_constraint": "their location/remote constraint in one sentence",
+  "exclusions": ["each thing they explicitly do NOT want - roles, industries, conditions"]
+}
+
+Rules:
+- target_titles: capture ALL titles they list, even 10+. Order matters.
+- network_contacts: only people with a company association. Skip contacts with no company.
+- watched_company_hints: company names only (e.g. "Anthropic", "Commerce7"), not categories.
+- If a section is absent, use [] or "".`;
+
+export async function extractProfileData(ai: Ai, context: string): Promise<ParsedProfile> {
+  return runJson<ParsedProfile>(
+    ai,
+    EXTRACT_PROFILE_SYSTEM,
+    `CONTEXT DOCUMENT:\n\n${context.slice(0, 14000)}`,
+    1500
+  );
+}
+
+// --- Outreach plan ---
+// For a saved application: who to find, what to lead with, drafted message.
+
+export async function generateOutreachPlan(
+  ai: Ai,
+  jobTitle: string,
+  company: string,
+  jobDescription: string,
+  profileContext: string | undefined,
+  warmPath: string | null
+): Promise<string> {
+  const sys = `You create a practical outreach plan for one job application. Output plain markdown with EXACTLY these four sections:
+
+## Warm path
+${warmPath
+  ? `The candidate has a potential warm contact for this company: ${warmPath}. Lead with how to use that contact (what to ask, how to frame the intro request).`
+  : `No known warm contact. Say so in one line, then move on.`}
+
+## Who to find
+3 specific LinkedIn search strings (in backticks) for finding the right people at this company: typically the recruiter for this function, the likely hiring manager (infer their probable title from the job description), and a peer on the team. One line of guidance per search.
+
+## Lead with
+2-3 verified accomplishments from the candidate's context that map hardest onto THIS job description. One line each, with the reason it maps.
+
+## Message draft
+A short outreach message (under 120 words) to the most promising person above. Follow the candidate's voice rules exactly: direct, low-key, no corporate enthusiasm, no "passionate"/"thrilled"/"excited", no apologetic framing, no hedging, no em dashes, short sentences, plainly confident. Reference one specific accomplishment and one specific thing about the role. End with a small, easy ask (15-minute call or pointing them at the application), not a demand.
+
+Rules:
+- Only use accomplishments verifiable in the candidate's context. Never invent.
+- No preamble before the first section, no commentary after the last.${profileContext ? `
+
+CANDIDATE CONTEXT (authoritative for accomplishments, voice, and network):
+${profileContext.slice(0, 9000)}` : ''}`;
+
+  const response = await ai.run(TEXT_MODEL, {
+    messages: [
+      { role: 'system', content: sys },
+      {
+        role: 'user',
+        content: `JOB: ${jobTitle} at ${company}\n\nDESCRIPTION:\n${jobDescription.slice(0, 3000)}\n\nWrite the outreach plan now.`,
+      },
+    ],
+    max_tokens: 1200,
+  });
+  return extractText(response).trim();
 }
 
 export function laneFromString(s: string | null | undefined): JobLane | null {

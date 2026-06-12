@@ -11,7 +11,7 @@ applications.get('/', async (c) => {
   const status = c.req.query('status');
 
   let query = `
-    SELECT a.*, j.title as job_title, j.company, j.location, j.url as job_url, j.match_score,
+    SELECT a.*, j.title as job_title, j.company, j.location, j.url as job_url, j.match_score, j.warm_path,
       (SELECT COUNT(*) FROM application_contacts WHERE application_id = a.id) as contact_count,
       (SELECT COUNT(*) FROM application_communications WHERE application_id = a.id) as communication_count,
       (SELECT MAX(changed_at) FROM application_status_changes WHERE application_id = a.id) as last_status_change_at
@@ -387,6 +387,111 @@ applications.delete('/:id/communications/:commId', async (c) => {
   const commId = c.req.param('commId');
   await c.env.DB.prepare('DELETE FROM application_communications WHERE id = ?').bind(commId).run();
   return c.json({ success: true });
+});
+
+// Generate an outreach plan: warm path check + who to find + message draft
+applications.post('/:id/outreach-plan', async (c) => {
+  const id = c.req.param('id');
+  const app = await c.env.DB.prepare(`
+    SELECT a.id, j.title as job_title, j.company, j.description as job_description, j.warm_path
+    FROM applications a JOIN jobs j ON a.job_id = j.id WHERE a.id = ?
+  `).bind(id).first<{
+    job_title: string;
+    company: string;
+    job_description: string;
+    warm_path: string | null;
+  }>();
+  if (!app) return c.json({ error: 'Application not found' }, 404);
+
+  const profileRow = await c.env.DB.prepare(
+    'SELECT context, parsed_json FROM candidate_profile WHERE id = 1'
+  ).first<{ context: string; parsed_json: string | null }>();
+
+  // Use stored warm_path; if absent (job predates the column), recompute now
+  let warmPath = app.warm_path;
+  if (!warmPath && profileRow?.parsed_json) {
+    try {
+      const { findWarmPath } = await import('../services/warm');
+      const parsed = JSON.parse(profileRow.parsed_json);
+      warmPath = findWarmPath(app.company, parsed.network_contacts);
+    } catch { /* keep null */ }
+  }
+
+  const { generateOutreachPlan } = await import('../services/ai');
+  const plan = await generateOutreachPlan(
+    c.env.AI,
+    app.job_title,
+    app.company,
+    app.job_description || '',
+    profileRow?.context,
+    warmPath
+  );
+
+  await c.env.DB.prepare(
+    `UPDATE applications SET outreach_plan = ?, updated_at = datetime('now') WHERE id = ?`
+  ).bind(plan, id).run();
+
+  return c.json({ outreach_plan: plan, warm_path: warmPath });
+});
+
+// Find real people at the company via Hunter.io (requires HUNTER_API_KEY secret).
+// Free tier is ~25 searches/month, so this only runs on explicit click.
+applications.post('/:id/find-contacts', async (c) => {
+  if (!c.env.HUNTER_API_KEY) {
+    return c.json({
+      error: 'HUNTER_API_KEY not configured. Add it as a secret (free key at hunter.io) to enable people search.',
+    }, 400);
+  }
+  const id = c.req.param('id');
+  const app = await c.env.DB.prepare(`
+    SELECT j.company FROM applications a JOIN jobs j ON a.job_id = j.id WHERE a.id = ?
+  `).bind(id).first<{ company: string }>();
+  if (!app) return c.json({ error: 'Application not found' }, 404);
+
+  const url = `https://api.hunter.io/v2/domain-search?company=${encodeURIComponent(app.company)}&api_key=${c.env.HUNTER_API_KEY}&limit=10`;
+  const res = await fetch(url);
+  if (!res.ok) {
+    const errBody = await res.text().catch(() => '');
+    return c.json({ error: `Hunter API error (HTTP ${res.status}): ${errBody.slice(0, 200)}` }, 502);
+  }
+  const data = (await res.json()) as {
+    data?: {
+      domain?: string;
+      organization?: string;
+      emails?: Array<{
+        value: string;
+        first_name: string | null;
+        last_name: string | null;
+        position: string | null;
+        linkedin: string | null;
+        confidence: number;
+      }>;
+    };
+  };
+
+  const people = (data.data?.emails || [])
+    .filter((e) => e.first_name || e.last_name)
+    .map((e) => ({
+      name: [e.first_name, e.last_name].filter(Boolean).join(' '),
+      position: e.position,
+      email: e.value,
+      linkedin: e.linkedin,
+      confidence: e.confidence,
+    }))
+    // Recruiting / people / hiring-manager-ish roles first
+    .sort((a, b) => {
+      const score = (p: { position: string | null }) =>
+        /recruit|talent|people|hr\b/i.test(p.position || '') ? 0
+        : /manager|director|head|lead|vp/i.test(p.position || '') ? 1
+        : 2;
+      return score(a) - score(b);
+    });
+
+  return c.json({
+    company: data.data?.organization || app.company,
+    domain: data.data?.domain,
+    people,
+  });
 });
 
 // Get application pipeline stats

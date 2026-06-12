@@ -295,7 +295,12 @@ async function loadProfile() {
     if (data.profile?.context) {
       document.getElementById('profile-context').value = data.profile.context;
       const updated = data.profile.updated_at ? formatShortDate(data.profile.updated_at) : '';
-      document.getElementById('profile-status').textContent = updated ? `Saved ${updated}` : '';
+      let parsedNote = '';
+      try {
+        const p = JSON.parse(data.profile.parsed_json || 'null');
+        parsedNote = p ? ` · Parsed: ${p.target_titles?.length || 0} titles, ${p.network_contacts?.length || 0} contacts` : ' · Not parsed yet (re-save to parse)';
+      } catch { parsedNote = ''; }
+      document.getElementById('profile-status').textContent = (updated ? `Saved ${updated}` : '') + parsedNote;
     } else {
       document.getElementById('profile-status').textContent = 'No profile yet — paste your context and save.';
     }
@@ -381,13 +386,15 @@ async function saveProfile() {
   const btn = document.getElementById('btn-save-profile');
   const status = document.getElementById('profile-status');
   btn.disabled = true;
-  btn.textContent = 'Saving...';
+  btn.textContent = 'Saving & parsing...';
   try {
-    await api('/profile', { method: 'PUT', body: JSON.stringify({ context }) });
+    const data = await api('/profile', { method: 'PUT', body: JSON.stringify({ context }) });
     if (status) {
-      status.textContent = '✓ Saved. Will be used on next pipeline run.';
-      status.className = 'text-xs text-green-700';
-      setTimeout(() => { status.textContent = ''; status.className = 'text-xs text-gray-500'; }, 4000);
+      const p = data.parsed_summary;
+      status.textContent = p
+        ? `✓ Saved. Parsed: ${p.target_titles} target titles, ${p.network_contacts} network contacts, ${p.watched_company_hints} company hints, ${p.exclusions} exclusions. Used on next run.`
+        : `✓ Saved, but structured parsing failed${data.parse_error ? ` (${data.parse_error})` : ''}. Pipeline will fall back to LLM inference.`;
+      status.className = p ? 'text-xs text-green-700' : 'text-xs text-orange-700';
     }
   } catch (e) {
     if (status) {
@@ -427,6 +434,11 @@ async function api(path, options = {}) {
 
 function scoreClass(s) { return s >= 70 ? 'score-high' : s >= 40 ? 'score-med' : 'score-low'; }
 function scoreBadge(s) { return s == null ? '' : `<span class="inline-block px-2 py-0.5 rounded text-xs font-medium ${scoreClass(s)}">${Math.round(s)}% match</span>`; }
+function warmBadge(w) {
+  if (!w) return '';
+  return `<span class="inline-block px-2 py-0.5 rounded text-xs font-medium bg-amber-100 text-amber-800" title="Warm path via your network">🤝 ${esc(w)}</span>`;
+}
+
 function laneBadge(l) {
   if (!l) return '';
   const labels = {
@@ -455,7 +467,7 @@ async function loadDashboard() {
             <p class="font-medium text-sm truncate">${esc(j.title)}</p>
             <p class="text-xs text-gray-500 truncate">${esc(j.company)} · ${esc(j.location || 'N/A')}</p>
           </div>
-          <div class="flex flex-col items-end gap-1">${scoreBadge(j.match_score)}${laneBadge(j.lane)}</div>
+          <div class="flex flex-col items-end gap-1">${scoreBadge(j.match_score)}${laneBadge(j.lane)}${warmBadge(j.warm_path)}</div>
         </div>`).join('');
     } else {
       topEl.innerHTML = '<p class="text-gray-400 text-sm">No matches yet.</p>';
@@ -512,7 +524,7 @@ async function loadJobs() {
           <p class="text-xs text-gray-400 mt-1">${esc(j.source || '')} · ${new Date(j.created_at).toLocaleDateString()}</p>
         </div>
         <div class="flex flex-col items-end gap-1 shrink-0">
-          ${scoreBadge(j.match_score)}${laneBadge(j.lane)}
+          ${scoreBadge(j.match_score)}${laneBadge(j.lane)}${warmBadge(j.warm_path)}
           <button onclick="event.stopPropagation(); saveJob(${j.id}, ${j.resume_id || 'null'})" class="text-xs text-blue-600 hover:underline mt-1">Save</button>
         </div>
       </div>
@@ -534,7 +546,7 @@ async function viewJob(id) {
   document.getElementById('modal-company').textContent = `${j.company} · ${j.location || 'N/A'}`;
   const skills = JSON.parse(j.skills_required || '[]');
   document.getElementById('modal-body').innerHTML = `
-    <div class="flex gap-2 flex-wrap">${scoreBadge(j.match_score)}${laneBadge(j.lane)}${appId ? '<span class="inline-block px-2 py-0.5 rounded text-xs font-medium bg-purple-100 text-purple-800">In tracker</span>' : ''}</div>
+    <div class="flex gap-2 flex-wrap">${scoreBadge(j.match_score)}${laneBadge(j.lane)}${warmBadge(j.warm_path)}${appId ? '<span class="inline-block px-2 py-0.5 rounded text-xs font-medium bg-purple-100 text-purple-800">In tracker</span>' : ''}</div>
     ${j.match_explanation ? `<div class="text-sm text-gray-700 bg-blue-50 p-3 rounded-lg"><span class="font-medium">Why this fits:</span> ${esc(j.match_explanation)}</div>` : ''}
     ${j.salary_max ? `<p class="text-sm font-medium text-green-700">💰 $${(j.salary_min||0).toLocaleString()} - $${j.salary_max.toLocaleString()}</p>` : ''}
     ${j.remote ? '<p class="text-sm">🏠 Remote</p>' : ''}
@@ -635,11 +647,13 @@ async function loadApplications() {
     const commCount = a.communication_count || 0;
     const hasAttention = (a.tailored_resume || a.cover_letter);
     const pills = [
+      a.warm_path ? `<span class="pill bg-amber-100 text-amber-800" title="Warm path via your network">🤝 ${esc(a.warm_path)}</span>` : '',
       hasNotes ? `<span class="pill bg-gray-200 text-gray-700" title="Has notes">📝 notes</span>` : '',
       contactCount > 0 ? `<span class="pill bg-indigo-100 text-indigo-800" title="${contactCount} contact(s)">👤 ${contactCount}</span>` : '',
       commCount > 0 ? `<span class="pill bg-blue-100 text-blue-800" title="${commCount} communication(s)">💬 ${commCount}</span>` : '',
       a.tailored_resume ? `<span class="pill bg-purple-100 text-purple-800" title="Has tailored resume">📄</span>` : '',
       a.cover_letter ? `<span class="pill bg-orange-100 text-orange-800" title="Has cover letter">✉️</span>` : '',
+      a.outreach_plan ? `<span class="pill bg-teal-100 text-teal-800" title="Has outreach plan">🎯</span>` : '',
     ].filter(Boolean).join(' ');
 
     const addedDate = formatShortDate(a.created_at);
@@ -666,6 +680,7 @@ async function loadApplications() {
           <button id="manage-btn-${a.id}" onclick="event.stopPropagation(); toggleManage(${a.id})" class="text-xs text-indigo-600 hover:underline">Manage</button>
           <button id="tailor-btn-${a.id}" onclick="event.stopPropagation(); tailorResume(${a.id})" class="text-xs text-purple-600 hover:underline">${a.tailored_resume ? 'Redo Resume' : 'Tailor Resume'}</button>
           <button id="cover-btn-${a.id}" onclick="event.stopPropagation(); generateCover(${a.id})" class="text-xs text-orange-600 hover:underline">${a.cover_letter ? 'Redo Cover Letter' : 'Cover Letter'}</button>
+          <button id="outreach-btn-${a.id}" onclick="event.stopPropagation(); generateOutreach(${a.id})" class="text-xs text-teal-600 hover:underline">${a.outreach_plan ? 'Redo Outreach' : 'Outreach'}</button>
           <button onclick="event.stopPropagation(); deleteApp(${a.id})" class="text-red-500 hover:text-red-700 text-xs">✕</button>
         </div>
       </div>
@@ -673,6 +688,7 @@ async function loadApplications() {
       ${a.custom_url ? `<p class="text-xs mt-1"><a href="${esc(a.custom_url)}" target="_blank" class="text-blue-600 hover:underline">${esc(a.custom_url)} ↗</a></p>` : ''}
       ${a.tailored_resume ? `<details class="mt-3"><summary class="text-xs text-purple-700 cursor-pointer">View Tailored Resume</summary><pre class="text-xs bg-gray-50 p-3 mt-2 rounded whitespace-pre-wrap font-sans">${esc(a.tailored_resume)}</pre></details>` : ''}
       ${a.cover_letter ? `<details class="mt-2"><summary class="text-xs text-orange-700 cursor-pointer">View Cover Letter</summary><pre class="text-xs bg-gray-50 p-3 mt-2 rounded whitespace-pre-wrap font-sans">${esc(a.cover_letter)}</pre></details>` : ''}
+      ${a.outreach_plan ? `<details class="mt-2"><summary class="text-xs text-teal-700 cursor-pointer">View Outreach Plan</summary><pre class="text-xs bg-teal-50 p-3 mt-2 rounded whitespace-pre-wrap font-sans">${esc(a.outreach_plan)}</pre></details>` : ''}
       ${a.notes ? `<p class="text-xs text-gray-600 mt-2 whitespace-pre-wrap">${esc(a.notes)}</p>` : ''}
       <div id="manage-${a.id}" class="hidden mt-3 pt-3 border-t"></div>
     </div>`;
@@ -826,6 +842,10 @@ async function renderManage(appId) {
             <button onclick="addContact(${appId})" class="bg-indigo-600 text-white px-3 py-1 rounded text-xs hover:bg-indigo-700">Save contact</button>
           </div>
         </details>
+        <div class="mt-2">
+          <button onclick="findHunterContacts(${appId})" class="text-xs text-teal-700 hover:underline">🔍 Find real people at this company (Hunter.io)</button>
+          <div id="hunter-results-${appId}" class="mt-1"></div>
+        </div>
       </section>
 
       <section>
@@ -945,6 +965,7 @@ async function resolveResumeId(appId) {
 const AI_ACCENTS = {
   purple: 'mt-3 text-xs text-purple-800 bg-purple-50 border border-purple-200 rounded px-3 py-2 flex items-center gap-2',
   orange: 'mt-3 text-xs text-orange-800 bg-orange-50 border border-orange-200 rounded px-3 py-2 flex items-center gap-2',
+  teal: 'mt-3 text-xs text-teal-800 bg-teal-50 border border-teal-200 rounded px-3 py-2 flex items-center gap-2',
 };
 
 // Runs an AI task with visible loading state: spinner in button, banner in card, success/error handling.
@@ -1003,6 +1024,79 @@ async function generateCover(appId) {
     accent: 'orange',
     successLabel: 'Cover letter',
   });
+}
+
+async function generateOutreach(appId) {
+  // Outreach plan doesn't need a resume - it uses the profile + job directly,
+  // so call the endpoint without the resume-resolution step.
+  const btn = document.getElementById(`outreach-btn-${appId}`);
+  const originalHTML = btn?.innerHTML;
+  if (btn) { btn.innerHTML = '<span class="spinner"></span> Planning...'; btn.disabled = true; }
+  const statusEl = document.getElementById(`ai-status-${appId}`);
+  if (statusEl) {
+    statusEl.className = AI_ACCENTS.teal;
+    statusEl.innerHTML = '<span class="spinner"></span><span>Building outreach plan: warm path check, who to contact, message draft. ~20-30 seconds.</span>';
+  }
+  const start = Date.now();
+  try {
+    await api(`/applications/${appId}/outreach-plan`, { method: 'POST', body: JSON.stringify({}) });
+    const seconds = Math.round((Date.now() - start) / 1000);
+    if (statusEl) {
+      statusEl.className = 'mt-3 text-xs text-green-800 bg-green-50 border border-green-200 rounded px-3 py-2';
+      statusEl.textContent = `✓ Outreach plan ready (${seconds}s). Expand below to view.`;
+      setTimeout(() => { if (statusEl) { statusEl.innerHTML = ''; statusEl.className = ''; } }, 5000);
+    }
+    loadApplications();
+  } catch (e) {
+    if (statusEl) {
+      statusEl.className = 'mt-3 text-xs text-red-800 bg-red-50 border border-red-200 rounded px-3 py-2';
+      statusEl.textContent = '✗ Error: ' + e.message;
+    }
+    if (btn) { btn.innerHTML = originalHTML; btn.disabled = false; }
+  }
+}
+
+async function findHunterContacts(appId) {
+  const out = document.getElementById('hunter-results-' + appId);
+  if (out) out.innerHTML = '<span class="spinner"></span> <span class="text-xs text-gray-500">Searching Hunter.io... (uses 1 of ~25 free monthly searches)</span>';
+  try {
+    const data = await api(`/applications/${appId}/find-contacts`, { method: 'POST', body: JSON.stringify({}) });
+    if (!out) return;
+    if (!data.people?.length) {
+      out.innerHTML = `<p class="text-xs text-gray-500">No people found for ${esc(data.company || 'this company')}${data.domain ? ` (${esc(data.domain)})` : ''}.</p>`;
+      return;
+    }
+    out.innerHTML = `
+      <p class="text-xs text-gray-600 mb-1">Found at ${esc(data.company)}${data.domain ? ` (${esc(data.domain)})` : ''}:</p>
+      ${data.people.map(p => `
+        <div class="flex items-center justify-between text-xs border rounded p-2 bg-white mb-1">
+          <div class="flex-1 min-w-0">
+            <span class="font-medium">${esc(p.name)}</span>
+            ${p.position ? `<span class="text-gray-500"> · ${esc(p.position)}</span>` : ''}
+            <span class="text-gray-400"> · ${esc(p.email)} (${p.confidence}%)</span>
+            ${p.linkedin ? ` · <a href="${esc(p.linkedin)}" target="_blank" class="text-blue-600 hover:underline">LinkedIn ↗</a>` : ''}
+          </div>
+          <button onclick='addContactFromHunter(${appId}, ${JSON.stringify(p.name)}, ${JSON.stringify(p.position || '')}, ${JSON.stringify(p.email)}, ${JSON.stringify(p.linkedin || '')})' class="text-indigo-600 hover:underline ml-2 shrink-0">+ Add</button>
+        </div>`).join('')}`;
+  } catch (e) {
+    if (out) out.innerHTML = `<p class="text-xs text-red-600">${esc(e.message)}</p>`;
+  }
+}
+
+async function addContactFromHunter(appId, name, position, email, linkedin) {
+  try {
+    await api(`/applications/${appId}/contacts`, {
+      method: 'POST',
+      body: JSON.stringify({
+        name,
+        role: /recruit|talent/i.test(position) ? 'recruiter' : 'other',
+        email,
+        linkedin: linkedin || undefined,
+        notes: position || undefined,
+      }),
+    });
+    renderManage(appId);
+  } catch (e) { alert('Error: ' + e.message); }
 }
 
 async function loadResumes() {

@@ -143,6 +143,29 @@ app.get('/api/diagnostics', async (c) => {
     checks.d1_pipeline_events_unique_index = { ok: false, detail: (e as Error).message };
   }
 
+  // Migration 009 columns (warm paths / outreach plans / parsed profile)
+  try {
+    const jobCols = await c.env.DB.prepare("PRAGMA table_info(jobs)").all<{ name: string }>();
+    const hasWarm = (jobCols.results || []).some((col) => col.name === 'warm_path');
+    const profCols = await c.env.DB.prepare("PRAGMA table_info(candidate_profile)").all<{ name: string }>();
+    const hasParsed = (profCols.results || []).some((col) => col.name === 'parsed_json');
+    const appCols = await c.env.DB.prepare("PRAGMA table_info(applications)").all<{ name: string }>();
+    const hasOutreach = (appCols.results || []).some((col) => col.name === 'outreach_plan');
+    const ok = hasWarm && hasParsed && hasOutreach;
+    checks.d1_migration_009 = {
+      ok,
+      detail: ok ? undefined : 'Run migration 009: ALTER TABLE candidate_profile ADD COLUMN parsed_json TEXT; ALTER TABLE applications ADD COLUMN outreach_plan TEXT; ALTER TABLE jobs ADD COLUMN warm_path TEXT;',
+    };
+  } catch (e) {
+    checks.d1_migration_009 = { ok: false, detail: (e as Error).message };
+  }
+
+  // Hunter.io key (optional - powers Find Contacts)
+  checks.hunter_api_key = {
+    ok: !!c.env.HUNTER_API_KEY,
+    detail: c.env.HUNTER_API_KEY ? undefined : 'Optional: add HUNTER_API_KEY secret to enable people search on applications',
+  };
+
   // Workflow binding present
   checks.workflow_binding = {
     ok: typeof c.env.PIPELINE !== 'undefined',
@@ -165,7 +188,7 @@ app.get('/api/dashboard', async (c) => {
     c.env.DB.prepare('SELECT COUNT(*) as count FROM applications').first<{ count: number }>(),
     c.env.DB.prepare('SELECT status, COUNT(*) as count FROM applications GROUP BY status').all(),
     c.env.DB.prepare(`
-      SELECT id, title, company, location, match_score, lane, url FROM jobs
+      SELECT id, title, company, location, match_score, lane, warm_path, url FROM jobs
       WHERE id NOT IN (SELECT job_id FROM applications)
       ORDER BY match_score DESC LIMIT 5
     `).all(),

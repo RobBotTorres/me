@@ -10,6 +10,7 @@ CREATE UNIQUE INDEX IF NOT EXISTS uniq_watched_slug_ats ON watched_companies(slu
 CREATE TABLE IF NOT EXISTS candidate_profile (
   id INTEGER PRIMARY KEY CHECK (id = 1),
   context TEXT NOT NULL,
+  parsed_json TEXT,
   updated_at TEXT DEFAULT (datetime('now'))
 );
 
@@ -65,6 +66,7 @@ CREATE TABLE IF NOT EXISTS jobs (
   match_explanation TEXT,
   semantic_score REAL,
   lane TEXT,
+  warm_path TEXT,
   resume_id INTEGER REFERENCES resumes(id),
   posted_at TEXT,
   created_at TEXT DEFAULT (datetime('now'))
@@ -77,6 +79,7 @@ CREATE TABLE IF NOT EXISTS applications (
   status TEXT DEFAULT 'saved',
   cover_letter TEXT,
   tailored_resume TEXT,
+  outreach_plan TEXT,
   notes TEXT,
   custom_url TEXT,
   applied_at TEXT,

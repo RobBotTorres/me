@@ -33,10 +33,13 @@ not_found_handling = "single-page-application"
 # Self URL for workflow -> worker self-fetch (offloads AI calls to fresh Worker invocations)
 SELF_URL = "https://job-search-agent.robbieetorres.workers.dev"
 
-# Optional job board API keys (add via dashboard as secrets):
+# Optional API keys (add via dashboard as secrets):
 #   npx wrangler secret put RAPIDAPI_KEY
 #   npx wrangler secret put ADZUNA_APP_ID
 #   npx wrangler secret put ADZUNA_APP_KEY
+#   npx wrangler secret put JOOBLE_API_KEY
+#   npx wrangler secret put FINDWORK_API_KEY
+#   npx wrangler secret put HUNTER_API_KEY    # people search (hunter.io, free tier ~25/mo)
 
 # Daily pipeline rerun. Cron expressions are UTC.
 # 0 7 * * *  = 3 AM ET standard time / 2 AM ET daylight time

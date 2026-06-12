@@ -1,5 +1,15 @@
 import { ExternalJob } from '../types';
 
+// Loose keyword match: every significant word of the query must appear somewhere
+// in the haystack. Fixes sources that previously required the exact phrase
+// ("technical program manager") and so returned zero for multi-word titles.
+function matchesQuery(haystack: string, query: string): boolean {
+  const hay = haystack.toLowerCase();
+  const words = query.toLowerCase().split(/\s+/).filter((w) => w.length > 2);
+  if (words.length === 0) return true;
+  return words.every((w) => hay.includes(w));
+}
+
 /**
  * Aggregates jobs from multiple free/freemium boards.
  * All sources run in parallel. Each source catches its own errors so a single failure doesn't kill the batch.
@@ -68,11 +78,9 @@ async function searchRemoteOK(query: string): Promise<ExternalJob[]> {
       description: string; url: string; tags: string[]; date: string;
       salary_min?: number; salary_max?: number;
     }>;
-    const q = query.toLowerCase();
-    const matches = jobs.filter((j) => {
-      const hay = `${j.position} ${(j.tags || []).join(' ')} ${j.description || ''}`.toLowerCase();
-      return hay.includes(q);
-    }).slice(0, 50);
+    const matches = jobs.filter((j) =>
+      matchesQuery(`${j.position} ${(j.tags || []).join(' ')} ${j.description || ''}`, query)
+    ).slice(0, 50);
     return matches.map((j) => ({
       title: j.position,
       company: j.company,
@@ -92,23 +100,23 @@ async function searchRemoteOK(query: string): Promise<ExternalJob[]> {
 // --- The Muse (free, no auth) ---
 async function searchTheMuse(query: string): Promise<ExternalJob[]> {
   try {
-    // Muse doesn't do keyword search via URL param well; we fetch page 1 and filter.
-    const res = await fetch(
-      `https://www.themuse.com/api/public/jobs?page=1&descending=true`
-    );
-    if (!res.ok) return [];
-    const data = (await res.json()) as {
-      results: Array<{
-        id: number; name: string; contents: string; refs: { landing_page: string };
-        company: { name: string }; locations: Array<{ name: string }>;
-        categories: Array<{ name: string }>; publication_date: string;
-      }>;
+    // Muse keyword search is weak; fetch 3 pages in parallel and filter locally.
+    type MuseJob = {
+      id: number; name: string; contents: string; refs: { landing_page: string };
+      company: { name: string }; locations: Array<{ name: string }>;
+      categories: Array<{ name: string }>; publication_date: string;
     };
-    const q = query.toLowerCase();
-    const matches = data.results.filter((j) => {
-      const hay = `${j.name} ${(j.categories || []).map((c) => c.name).join(' ')} ${j.contents || ''}`.toLowerCase();
-      return hay.includes(q);
-    }).slice(0, 40);
+    const pages = await Promise.all(
+      [1, 2, 3].map(async (p) => {
+        const res = await fetch(`https://www.themuse.com/api/public/jobs?page=${p}&descending=true`);
+        if (!res.ok) return [] as MuseJob[];
+        const data = (await res.json()) as { results: MuseJob[] };
+        return data.results || [];
+      })
+    );
+    const matches = pages.flat().filter((j) =>
+      matchesQuery(`${j.name} ${(j.categories || []).map((c) => c.name).join(' ')} ${j.contents || ''}`, query)
+    ).slice(0, 40);
     return matches.map((j) => {
       const locName = j.locations?.[0]?.name || 'Not specified';
       const remote = /remote/i.test(locName);
@@ -187,11 +195,9 @@ async function searchWorkingNomads(query: string): Promise<ExternalJob[]> {
       title: string; company_name: string; location: string; description: string;
       url: string; category_name: string; pub_date: string;
     }>;
-    const q = query.toLowerCase();
-    const matches = jobs.filter((j) => {
-      const hay = `${j.title} ${j.category_name} ${j.description || ''}`.toLowerCase();
-      return hay.includes(q);
-    }).slice(0, 40);
+    const matches = jobs.filter((j) =>
+      matchesQuery(`${j.title} ${j.category_name} ${j.description || ''}`, query)
+    ).slice(0, 40);
     return matches.map((j, i) => ({
       title: j.title,
       company: j.company_name,
@@ -416,7 +422,6 @@ export async function searchWeWorkRemotely(query: string): Promise<ExternalJob[]
     const xml = await res.text();
     // RSS items: <item><title>...</title><description>...</description><pubDate>...</pubDate><link>...</link><guid>...</guid></item>
     const items = xml.split('<item>').slice(1);
-    const q = query.toLowerCase();
     const jobs: ExternalJob[] = [];
     for (const item of items) {
       const title = (item.match(/<title>(?:<!\[CDATA\[)?([\s\S]*?)(?:\]\]>)?<\/title>/) || [])[1] || '';
@@ -424,8 +429,7 @@ export async function searchWeWorkRemotely(query: string): Promise<ExternalJob[]
       const link = (item.match(/<link>([\s\S]*?)<\/link>/) || [])[1] || '';
       const pubDate = (item.match(/<pubDate>([\s\S]*?)<\/pubDate>/) || [])[1] || '';
       const guid = (item.match(/<guid[^>]*>([\s\S]*?)<\/guid>/) || [])[1] || link;
-      const hay = `${title} ${description}`.toLowerCase();
-      if (!hay.includes(q)) continue;
+      if (!matchesQuery(`${title} ${description}`, query)) continue;
       // Title format is usually "Company: Role Title"
       const parts = title.split(':').map((s) => s.trim());
       const company = parts.length > 1 ? parts[0] : 'Unknown';
@@ -663,7 +667,9 @@ export async function searchJobs(options: SearchOptions): Promise<ExternalJob[]>
     return true;
   });
 
-  return allJobs;
+  // Trim descriptions: keeps per-query workflow step outputs comfortably
+  // under the 1 MiB step.do output cap.
+  return allJobs.map((j) => ({ ...j, description: (j.description || '').slice(0, 2000) }));
 }
 
 function stripHtml(html: string): string {

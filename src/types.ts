@@ -8,7 +8,20 @@ export interface Env {
   ADZUNA_APP_KEY?: string;
   JOOBLE_API_KEY?: string;
   FINDWORK_API_KEY?: string;
+  HUNTER_API_KEY?: string;
   SELF_URL?: string;
+}
+
+// Structured data extracted from the candidate's freeform profile context.
+// Extracted once at profile-save time, used deterministically by the pipeline
+// (avoids LLM drift, e.g. only emitting 5 of 10 explicit target titles).
+export interface ParsedProfile {
+  target_titles: string[];
+  role_thesis: string;
+  network_contacts: Array<{ name: string; company: string; notes?: string }>;
+  watched_company_hints: string[];
+  location_constraint: string;
+  exclusions: string[];
 }
 
 export interface PipelineEvent {
@@ -69,6 +82,7 @@ export interface Job {
   match_explanation: string | null;
   semantic_score: number | null;
   lane: JobLane | null;
+  warm_path: string | null;
   resume_id: number | null;
   posted_at: string | null;
   created_at: string;
@@ -109,6 +123,7 @@ export interface Application {
   status: string;
   cover_letter: string | null;
   tailored_resume: string | null;
+  outreach_plan: string | null;
   notes: string | null;
   custom_url: string | null;
   applied_at: string | null;
