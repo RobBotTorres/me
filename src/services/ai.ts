@@ -148,7 +148,7 @@ The candidate has provided a structured context document below. Treat its data a
 - Voice and tone for any text fields: direct, low-key, no corporate enthusiasm. No "passionate", "thrilled", "excited". No em dashes.
 
 CANDIDATE CONTEXT:
-${profileContext.slice(0, 12000)}`
+${profileContext.slice(0, 9000)}`
     : DIAGNOSE_SYSTEM;
 
   return runJson<ResumeDiagnosis>(
@@ -206,7 +206,7 @@ export async function rerankJobs(
   };
 
   const jobBlocks = jobs
-    .map((j, i) => `[${i}] ${j.title} @ ${j.company}\n${(j.description || '').slice(0, 800)}`)
+    .map((j, i) => `[${i}] ${j.title} @ ${j.company}\n${(j.description || '').slice(0, 600)}`)
     .join('\n\n---\n\n');
 
   const sysPrompt = profileContext
@@ -252,7 +252,7 @@ REASONING REQUIREMENTS:
 - If lane=stretch and there's no obvious warm-intro path, note "warm-intro-gated" in reasoning
 
 CANDIDATE CONTEXT (for additional details):
-${profileContext.slice(0, 8000)}`
+${profileContext.slice(0, 4000)}`
     : RERANK_SYSTEM;
 
   const result = await runJson<{ results: JobRerankResultExt[] }>(
@@ -262,7 +262,7 @@ ${profileContext.slice(0, 8000)}`
 ${JSON.stringify(diagSummary, null, 2)}
 
 RESUME EXCERPT:
-${resumeText.slice(0, 1500)}
+${resumeText.slice(0, 1200)}
 
 JOBS TO RANK:
 ${jobBlocks}`,

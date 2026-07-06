@@ -331,7 +331,12 @@ export class ResumePipeline extends WorkflowEntrypoint<Env, ResumePipelineParams
       }
     );
 
-    // ---- Step 4: Rerank (direct ai.run, batched inside the step) ----
+    // ---- Step 4: Rerank, ONE BATCH PER STEP ----
+    // Previously all 4 LLM calls ran inside a single 5-minute step. On slow
+    // Workers AI days each call takes 60-180s, so the step blew its timeout
+    // (observed: 12-minute rerank on 2026-06-25, WorkflowTimeoutError today).
+    // Per-batch steps give every LLM call its own timeout + retries, and a
+    // failed batch degrades to semantic scores instead of killing the run.
     type RankedJob = {
       job: ExternalJob; semantic: number;
       score: number; lane: JobLane | null; reasoning: string; skills: string[];
@@ -339,18 +344,22 @@ export class ResumePipeline extends WorkflowEntrypoint<Env, ResumePipelineParams
 
     const topForLLM = scored.slice(0, LLM_RANKED_COUNT);
     const semanticOnly = scored.slice(LLM_RANKED_COUNT);
+    const totalBatches = Math.ceil(topForLLM.length / RERANK_BATCH_SIZE);
 
-    const rankedJobs: RankedJob[] = await step.do(
-      'rerank-all',
-      { retries: { limit: 2, delay: '10 seconds' }, timeout: '5 minutes' },
-      async (): Promise<RankedJob[]> => {
-        await emitEvent(db, resumeId, 'rerank', 'running', { current: 0, total: topForLLM.length });
+    const rankedJobs: RankedJob[] = [];
+    for (let b = 0; b < totalBatches; b++) {
+      const start = b * RERANK_BATCH_SIZE;
+      const batch = topForLLM.slice(start, start + RERANK_BATCH_SIZE);
 
-        const out: RankedJob[] = [];
-        const totalBatches = Math.ceil(topForLLM.length / RERANK_BATCH_SIZE);
-        for (let b = 0; b < totalBatches; b++) {
-          const start = b * RERANK_BATCH_SIZE;
-          const batch = topForLLM.slice(start, start + RERANK_BATCH_SIZE);
+      let batchRanked: RankedJob[];
+      try {
+        batchRanked = await step.do(
+        `rerank-batch-${b}`,
+        { retries: { limit: 2, delay: '15 seconds', backoff: 'exponential' }, timeout: '3 minutes' },
+        async (): Promise<RankedJob[]> => {
+          if (b === 0) {
+            await emitEvent(db, resumeId, 'rerank', 'running', { current: 0, total: topForLLM.length });
+          }
           try {
             const results = await rerankJobs(
               this.env.AI, diagnosis, resume.raw_text,
@@ -359,6 +368,7 @@ export class ResumePipeline extends WorkflowEntrypoint<Env, ResumePipelineParams
               })),
               profileContext
             );
+            const out: RankedJob[] = [];
             for (const r of results) {
               const src = batch[r.job_index];
               if (!src) continue;
@@ -370,38 +380,60 @@ export class ResumePipeline extends WorkflowEntrypoint<Env, ResumePipelineParams
                 skills: r.skills || [],
               });
             }
+            await emitEvent(db, resumeId, 'rerank', 'running', {
+              current: Math.min((b + 1) * RERANK_BATCH_SIZE, topForLLM.length),
+              total: topForLLM.length,
+            });
+            return out;
           } catch {
-            // Fallback: use semantic scores for this batch
-            for (const x of batch) {
-              out.push({
-                ...x,
-                score: Math.round(x.semantic * 100),
-                lane: 'lateral',
-                reasoning: 'Fallback score (batch rerank failed).',
-                skills: [],
-              });
-            }
+            // Fallback: semantic scores for this batch only; run continues
+            await emitEvent(db, resumeId, 'rerank', 'running', {
+              current: Math.min((b + 1) * RERANK_BATCH_SIZE, topForLLM.length),
+              total: topForLLM.length,
+              message: `Batch ${b + 1} fell back to semantic scoring (AI timeout)`,
+            });
+            return batch.map((x) => ({
+              ...x,
+              score: Math.round(x.semantic * 100),
+              lane: 'lateral' as JobLane,
+              reasoning: 'Fallback score (batch rerank timed out).',
+              skills: [],
+            }));
           }
         }
-
-        // Append semantic-only tier
-        for (const s of semanticOnly) {
-          out.push({
-            ...s,
-            score: Math.round(s.semantic * 100),
-            lane: null,
-            reasoning: 'Matched by semantic similarity (not LLM-reviewed).',
-            skills: [],
-          });
-        }
-
-        await emitEvent(db, resumeId, 'rerank', 'completed', {
-          current: out.length, total: out.length,
-          message: `${topForLLM.length} LLM-ranked, ${semanticOnly.length} semantic-only`,
-        });
-        return out;
+        );
+      } catch {
+        // Step-level timeout after all retries (engine-enforced, not catchable
+        // inside the step body). Degrade this batch, keep the run alive.
+        batchRanked = batch.map((x) => ({
+          ...x,
+          score: Math.round(x.semantic * 100),
+          lane: 'lateral' as JobLane,
+          reasoning: 'Fallback score (batch rerank exhausted retries).',
+          skills: [],
+        }));
       }
-    );
+      rankedJobs.push(...batchRanked);
+    }
+
+    // Append semantic-only tier + close out the rerank progress row
+    await step.do('rerank-finalize', async () => {
+      await emitEvent(db, resumeId, 'rerank', 'completed', {
+        current: topForLLM.length + semanticOnly.length,
+        total: topForLLM.length + semanticOnly.length,
+        message: `${topForLLM.length} LLM-ranked, ${semanticOnly.length} semantic-only`,
+      });
+    });
+    for (const s of semanticOnly) {
+      rankedJobs.push({
+        ...s,
+        score: Math.round(s.semantic * 100),
+        lane: null,
+        reasoning: 'Matched by semantic similarity (not LLM-reviewed).',
+        skills: [],
+      });
+    }
+
 
     // ---- Step 5: Save ----
     await step.do(
